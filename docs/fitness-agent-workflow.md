@@ -129,12 +129,33 @@ Supported goals:
 - General wellness
 - Sport-specific conditioning
 
+Plan duration:
+
+- Ask how long the user wants the overall plan to run, such as 4 weeks, 8 weeks, 12 weeks, or a custom number of months.
+- Store the duration with the active goal so weekly plans can be generated as phases inside a longer plan.
+- Use the duration to decide progression pacing, review checkpoints, and when to generate milestone summaries.
+
 Workflow:
 
-1. Ask the user's primary goal.
-2. Ask for target constraints if needed, such as days per week or target muscle groups.
-3. Save the active goal.
-4. Use the goal to select plan style and nutrition targets.
+1. Ask one general free-form question for the user's training target.
+2. Include hints so the user can mention what kind of athlete or trainee they are, target muscles, desired outcome, and plan duration in one answer.
+3. Parse the free-form answer deterministically into athlete type, target muscle groups, desired outcomes, and plan duration.
+4. Ask a follow-up only if the answer is missing required information such as desired outcome or plan duration.
+5. Save the active goal, raw goal text, parsed details, and plan duration.
+6. Use the goal and duration to select plan style, progression pace, review cadence, and nutrition targets.
+
+General prompt:
+
+```text
+What is your training target?
+
+Describe it naturally. Include what kind of athlete or trainee you are, any target muscles or performance areas, your desired outcome, and how long the plan should run.
+
+Examples:
+- I am a futsal athlete and want stronger hamstrings and calves, better VO2 max, and to stay lean over 3 months.
+- I want bigger shoulders and arms in 8 weeks.
+- I want fat loss and stronger core muscles over 1 month.
+```
 
 MVP table:
 
@@ -143,6 +164,7 @@ CREATE TABLE goals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id),
   goal_type STRING NOT NULL,
+  plan_duration_weeks INT,
   goal_details JSONB,
   status STRING NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -173,10 +195,13 @@ Adaptive fields:
 
 Workflow:
 
-1. Ask a short daily or every-few-days check-in.
-2. Store each check-in as a dated row.
-3. Calculate recent trends from the last 3 to 7 check-ins.
-4. Feed trends into the readiness score and plan adjustment module.
+1. Ask a short daily or every-few-days body/nutrition check-in.
+2. Vary the prompt based on recent memory, such as asking about a previous hamstring strain if it was mentioned before.
+3. Let the user answer naturally instead of requiring a strict daily form.
+4. Use Ollama to extract structured adaptive memory from the free-form response.
+5. Store each check-in as a dated row.
+6. Calculate recent trends from the last 3 to 7 check-ins.
+7. Feed trends into the readiness score and plan adjustment module.
 
 MVP table:
 
@@ -195,6 +220,7 @@ CREATE TABLE daily_checkins (
   workout_completed STRING,
   nutrition_adherence STRING,
   free_text_note STRING,
+  checkin_details JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -202,6 +228,7 @@ CREATE TABLE daily_checkins (
 Completion target:
 
 - The agent treats sleep, stress, soreness, pain, and weight as time-series memory, not one-off chat text.
+- The recurring user loop focuses mainly on body condition and nutrition instead of repeatedly asking static profile questions.
 
 ## 7. Module 5: Readiness Score
 
@@ -246,6 +273,7 @@ Inputs:
 
 - Static profile
 - Active goal
+- Plan duration
 - Equipment access
 - Weekly availability
 - Recent check-ins
@@ -254,10 +282,11 @@ Inputs:
 
 Workflow:
 
-1. Generate a weekly plan with training days, exercises, sets, reps, intensity, and rest.
-2. Store the plan.
-3. Link plan choices to goal and profile constraints.
-4. On check-in, adjust the current day's session if readiness is low.
+1. Generate a phase-aware plan for the requested duration, such as 4, 8, or 12 weeks.
+2. Break the plan into weekly blocks with training days, exercises, sets, reps, intensity, and rest.
+3. Store the active week and the overall duration context.
+4. Link plan choices to goal, duration, and profile constraints.
+5. On check-in, adjust the current day's session if readiness is low.
 
 MVP table:
 
@@ -275,7 +304,7 @@ CREATE TABLE workout_plans (
 
 Completion target:
 
-- The agent can create a different plan for each goal and revise the active plan when new adaptive memory arrives.
+- The agent can create a different duration-aware plan for each goal and revise the active plan when new adaptive memory arrives.
 
 ## 9. Module 7: Plan Repair
 

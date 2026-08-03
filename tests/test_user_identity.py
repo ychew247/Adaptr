@@ -1,4 +1,4 @@
-from src.module1_identity_flow import run_identity_flow
+from src.module1_identity_flow import identify_user, run_identity_flow
 from src.user_identity import UserIdentityService, normalize_name
 
 
@@ -60,17 +60,24 @@ def test_get_or_create_user_rejects_blank_name():
 def test_identity_flow_registers_new_user_and_returns_static_onboarding_step():
     repository = FakeUserRepository()
     messages = []
+    prompts = []
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return "Mira"
 
     next_step = run_identity_flow(
         repository=repository,
-        ask=lambda prompt: "Mira",
+        ask=ask,
         say=messages.append,
     )
 
     assert next_step == "static_onboarding"
     assert repository.find_by_normalized_name("mira")["display_name"] == "Mira"
+    assert prompts == [
+        "Hi, I am your adaptive fitness memory agent. What name should I use for your fitness profile?"
+    ]
     assert messages == [
-        "Hi, I am your adaptive fitness memory agent. What name should I use for your fitness profile?",
         "I do not have a profile for Mira yet, so I created one. Next I will collect your stable fitness profile.",
     ]
 
@@ -79,15 +86,37 @@ def test_identity_flow_loads_existing_user_and_returns_checkin_step():
     repository = FakeUserRepository()
     repository.create_user("Alex", "alex")
     messages = []
+    prompts = []
+
+    def ask(prompt):
+        prompts.append(prompt)
+        return " alex "
 
     next_step = run_identity_flow(
         repository=repository,
-        ask=lambda prompt: " alex ",
+        ask=ask,
         say=messages.append,
     )
 
     assert next_step == "adaptive_checkin"
+    assert prompts == [
+        "Hi, I am your adaptive fitness memory agent. What name should I use for your fitness profile?"
+    ]
     assert messages == [
-        "Hi, I am your adaptive fitness memory agent. What name should I use for your fitness profile?",
         "Welcome back, Alex. I loaded your fitness memory. Next I will ask for today's adaptive check-in.",
     ]
+
+
+def test_identify_user_returns_user_and_next_step():
+    repository = FakeUserRepository()
+    messages = []
+
+    user, next_step = identify_user(
+        repository=repository,
+        ask=lambda prompt: "Nora",
+        say=messages.append,
+    )
+
+    assert user["display_name"] == "Nora"
+    assert user["normalized_name"] == "nora"
+    assert next_step == "static_onboarding"

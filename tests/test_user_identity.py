@@ -1,5 +1,5 @@
 from src.module1_identity_flow import identify_user, run_identity_flow
-from src.user_identity import UserIdentityService, normalize_name
+from src.m1_user_identity import UserIdentityService, normalize_name
 
 
 class FakeUserRepository:

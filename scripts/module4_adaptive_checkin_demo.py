@@ -6,7 +6,7 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.adaptive_checkin import AdaptiveCheckinService
+from src.m4_adaptive_checkin import AdaptiveCheckinService
 from src.cockroach_checkin_repository import CockroachCheckinRepository
 from src.cockroach_goal_repository import CockroachGoalRepository
 from src.cockroach_static_profile_repository import CockroachStaticProfileRepository
@@ -15,8 +15,8 @@ from src.module1_identity_flow import identify_user
 from src.ollama_checkin_parser import OllamaCheckinParser
 from src.ollama_client import OllamaClient
 from src.ollama_goal_parser import OllamaGoalParser
-from src.static_profile import StaticProfileService
-from src.training_goal import TrainingGoalService
+from src.m2_static_profile import StaticProfileService
+from src.m3_training_goal import TrainingGoalService
 
 
 def main():

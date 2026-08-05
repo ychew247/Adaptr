@@ -82,11 +82,28 @@ def fetch_memory_tables(connection):
         )
         checkins = cursor.fetchall()
 
-    return users, profiles, goals, checkins
+        cursor.execute(
+            """
+            SELECT
+              u.display_name,
+              p.week_start,
+              p.exercise_names,
+              p.target_muscle_groups,
+              p.intensity_band,
+              p.plan_json,
+              p.status
+            FROM workout_plans AS p
+            JOIN users AS u ON u.id = p.user_id
+            ORDER BY p.created_at DESC
+            """
+        )
+        plans = cursor.fetchall()
+
+    return users, profiles, goals, checkins, plans
 
 
 def fetch_users_and_profiles(connection):
-    users, profiles, _goals, _checkins = fetch_memory_tables(connection)
+    users, profiles, _goals, _checkins, _plans = fetch_memory_tables(connection)
     return users, profiles
 
 

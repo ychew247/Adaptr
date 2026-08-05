@@ -9,8 +9,8 @@ from src.cockroach_goal_repository import CockroachGoalRepository
 from src.cockroach_static_profile_repository import CockroachStaticProfileRepository
 from src.cockroach_user_repository import CockroachUserRepository
 from src.module1_identity_flow import identify_user
-from src.static_profile import StaticProfileService
-from src.training_goal import TrainingGoalService
+from src.m2_static_profile import StaticProfileService
+from src.m3_training_goal import TrainingGoalService
 
 
 def main():

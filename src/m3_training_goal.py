@@ -109,15 +109,18 @@ class TrainingGoalService:
         self.repository = repository
         self.parser = parser or parse_training_goal
 
-    def run_goal_setup(self, user, ask=input, say=print):
+    def run_goal_setup(self, user, ask=input, say=print, replace_existing=False):
         existing = self.repository.find_active_by_user_id(user["id"])
         display_name = user["display_name"]
-        if existing is not None:
+        if existing is not None and not replace_existing:
             say(
                 f"I already have {display_name}'s active training goal. "
                 "Next I will ask for adaptive check-in details."
             )
             return "adaptive_checkin"
+
+        if existing is not None:
+            say(f"Replacing {display_name}'s active training goal.")
 
         answer = ask(GENERAL_GOAL_PROMPT)
         parsed = self.parser.parse(answer) if hasattr(self.parser, "parse") else self.parser(answer)

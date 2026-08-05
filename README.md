@@ -302,3 +302,69 @@ View saved check-ins:
 ```powershell
 python scripts/show_demo_data.py
 ```
+
+## Direct Module Testing
+
+Use `scripts/run_module.py` when you want to jump to a module without replaying the full Module 1 onward flow.
+
+Set your connection once:
+
+```powershell
+$env:DATABASE_URL = "your-cockroachdb-connection-string"
+$env:OLLAMA_BASE_URL = "http://localhost:11434"
+$env:OLLAMA_MODEL = "llama3.2"
+```
+
+Run only Module 2 for a named user:
+
+```powershell
+python scripts/run_module.py --module 2 --user Alex
+```
+
+Run Module 3 directly. If the static profile is missing, Module 2 runs first:
+
+```powershell
+python scripts/run_module.py --module 3 --user Alex
+```
+
+Run Module 4 directly. If static profile or active goal is missing, the runner fills those prerequisites first:
+
+```powershell
+python scripts/run_module.py --module 4 --user Alex
+```
+
+Run Module 5 directly. If no check-in exists, the runner asks for a Module 4 check-in first:
+
+```powershell
+python scripts/run_module.py --module 5 --user Alex
+```
+
+Run Module 6 directly to generate and save an Ollama-backed Week 1 workout plan:
+
+```powershell
+python scripts/run_module.py --module 6 --user Alex
+```
+
+For deterministic debugging without Ollama plan generation:
+
+```powershell
+python scripts/run_module.py --module 6 --user Alex --deterministic-plan
+```
+
+For a stable demo profile before testing later modules:
+
+```powershell
+python scripts/run_module.py --module 6 --seed-demo-profile
+```
+
+You can also compute readiness from the latest saved check-in:
+
+```powershell
+python scripts/module5_readiness_demo.py --user Alex
+```
+
+Or generate an Ollama-backed plan from the latest saved profile, goal, and check-in:
+
+```powershell
+python scripts/module6_workout_plan_demo.py --user Alex
+```

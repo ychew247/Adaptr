@@ -1,4 +1,4 @@
-from src.static_profile import StaticProfileService, parse_float, parse_int
+from src.m2_static_profile import StaticProfileService, parse_float, parse_int
 
 
 class FakeProfileRepository:
@@ -42,6 +42,7 @@ def test_static_profile_onboarding_saves_profile_and_routes_to_goal_setup():
             "none",
             "halal, high protein",
             "sedentary",
+            "male",
         ]
     )
     messages = []
@@ -59,6 +60,7 @@ def test_static_profile_onboarding_saves_profile_and_routes_to_goal_setup():
     assert saved["starting_weight_kg"] == 68.5
     assert saved["equipment_access"] == ["dumbbells", "resistance bands"]
     assert saved["weekly_availability"] == "Mon Wed Fri"
+    assert saved["bmr_formula_profile"] == "male"
     assert prompts[0] == "Age in years, e.g. 25:"
     assert messages == [
         "Saved Yu's static fitness profile. Next I will ask for the current goal."
@@ -69,7 +71,7 @@ def test_static_profile_onboarding_prompts_include_guidance_and_examples():
     repository = FakeProfileRepository()
     service = StaticProfileService(repository)
     prompts = []
-    answers = iter(["23", "170", "68.5", "beginner", "bodyweight", "3 days", "none", "none", "none", "lightly active"])
+    answers = iter(["23", "170", "68.5", "beginner", "bodyweight", "3 days", "none", "none", "none", "lightly active", "female"])
 
     service.run_onboarding(
         user={"id": "user-1", "display_name": "Yu"},
@@ -88,6 +90,7 @@ def test_static_profile_onboarding_prompts_include_guidance_and_examples():
         "Medical constraints. Example: asthma, heart condition, pregnancy, doctor restrictions, or none:",
         "Diet preferences or restrictions. Example: halal, vegetarian, high protein, lactose intolerant, or none:",
         "Current activity level. Choose sedentary, lightly active, moderately active, or very active:",
+        "For the Mifflin-St Jeor BMR formula, choose male or female. This is used only for the formula and is never guessed:",
     ]
 
 

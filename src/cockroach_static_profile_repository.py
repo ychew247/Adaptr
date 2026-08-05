@@ -18,6 +18,7 @@ class CockroachStaticProfileRepository:
                   medical_constraints,
                   diet_preferences,
                   activity_level,
+                  bmr_formula_profile,
                   created_at,
                   updated_at
                 FROM user_profiles
@@ -42,8 +43,9 @@ class CockroachStaticProfileRepository:
             "medical_constraints": row[8],
             "diet_preferences": row[9],
             "activity_level": row[10],
-            "created_at": row[11],
-            "updated_at": row[12],
+            "bmr_formula_profile": row[11],
+            "created_at": row[12],
+            "updated_at": row[13],
         }
 
     def upsert_profile(self, profile):
@@ -62,9 +64,10 @@ class CockroachStaticProfileRepository:
                   medical_constraints,
                   diet_preferences,
                   activity_level,
+                  bmr_formula_profile,
                   updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
                 RETURNING
                   user_id,
                   age,
@@ -77,6 +80,7 @@ class CockroachStaticProfileRepository:
                   medical_constraints,
                   diet_preferences,
                   activity_level,
+                  bmr_formula_profile,
                   created_at,
                   updated_at
                 """,
@@ -92,6 +96,7 @@ class CockroachStaticProfileRepository:
                     profile["medical_constraints"],
                     profile["diet_preferences"],
                     profile["activity_level"],
+                    profile.get("bmr_formula_profile"),
                 ),
             )
             row = cursor.fetchone()
@@ -109,6 +114,19 @@ class CockroachStaticProfileRepository:
             "medical_constraints": row[8],
             "diet_preferences": row[9],
             "activity_level": row[10],
-            "created_at": row[11],
-            "updated_at": row[12],
+            "bmr_formula_profile": row[11],
+            "created_at": row[12],
+            "updated_at": row[13],
         }
+
+    def set_bmr_formula_profile(self, user_id, formula_profile):
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE user_profiles
+                SET bmr_formula_profile = %s, updated_at = now()
+                WHERE user_id = %s
+                """,
+                (formula_profile, user_id),
+            )
+        self.connection.commit()

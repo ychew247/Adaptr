@@ -6,25 +6,20 @@ import sys
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.cockroach_goal_repository import CockroachGoalRepository
-from src.cockroach_static_profile_repository import CockroachStaticProfileRepository
+from src.cockroach_checkin_repository import CockroachCheckinRepository
 from src.cockroach_user_repository import CockroachUserRepository
-from src.module1_identity_flow import identify_user
-from src.ollama_client import OllamaClient
-from src.ollama_goal_parser import OllamaGoalParser
-from src.m2_static_profile import StaticProfileService
-from src.m3_training_goal import TrainingGoalService
+from src.m5_readiness_score import compute_readiness
+from src.m1_user_identity import UserIdentityService
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--user", default="Alex")
     parser.add_argument("--skip-live", action="store_true")
     args = parser.parse_args()
 
-    print("Module 3 parser: Ollama")
-
     if args.skip_live:
-        print("Module 3 Ollama demo imports successfully.")
+        print("Module 5 readiness demo imports successfully.")
         return
 
     database_url = os.getenv("DATABASE_URL")
@@ -40,8 +35,7 @@ def main():
 
     migrations = [
         Path("sql/001_create_users.sql").read_text(encoding="utf-8"),
-        Path("sql/002_create_user_profiles.sql").read_text(encoding="utf-8"),
-        Path("sql/003_create_goals.sql").read_text(encoding="utf-8"),
+        Path("sql/004_create_daily_checkins.sql").read_text(encoding="utf-8"),
     ]
 
     with psycopg2.connect(database_url) as connection:
@@ -51,13 +45,21 @@ def main():
         connection.commit()
 
         user_repository = CockroachUserRepository(connection)
-        profile_repository = CockroachStaticProfileRepository(connection)
-        goal_repository = CockroachGoalRepository(connection)
-        goal_parser = OllamaGoalParser(OllamaClient())
+        checkin_repository = CockroachCheckinRepository(connection)
+        user = UserIdentityService(user_repository).get_or_create_user(args.user).user
+        checkins = checkin_repository.find_recent_by_user_id(user["id"], limit=30)
 
-        user, _next_step = identify_user(user_repository)
-        StaticProfileService(profile_repository).run_onboarding(user)
-        TrainingGoalService(goal_repository, parser=goal_parser).run_goal_setup(user)
+    if not checkins:
+        raise RuntimeError("No check-ins found. Run Module 4 first.")
+
+    today_checkin = checkins[0]
+    history = list(reversed(checkins[1:]))
+    result = compute_readiness(history, today_checkin)
+
+    print(f"Readiness score for {user['display_name']}: {result['readiness_score']}")
+    print(f"Band: {result['band']}")
+    print(f"Safety triggered: {result['safety_triggered']}")
+    print(f"Components: {result['components']}")
 
 
 if __name__ == "__main__":

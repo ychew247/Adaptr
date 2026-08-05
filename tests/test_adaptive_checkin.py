@@ -1,4 +1,4 @@
-from src.adaptive_checkin import (
+from src.m4_adaptive_checkin import (
     AdaptiveCheckinService,
     build_adaptive_checkin_prompt,
 )

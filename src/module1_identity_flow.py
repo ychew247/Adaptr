@@ -1,4 +1,4 @@
-from src.user_identity import UserIdentityService
+from src.m1_user_identity import UserIdentityService
 
 
 def run_identity_flow(repository, ask=input, say=print):

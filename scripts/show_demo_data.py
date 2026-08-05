@@ -25,6 +25,7 @@ def main():
         Path("sql/002_create_user_profiles.sql").read_text(encoding="utf-8"),
         Path("sql/003_create_goals.sql").read_text(encoding="utf-8"),
         Path("sql/004_create_daily_checkins.sql").read_text(encoding="utf-8"),
+        Path("sql/005_create_workout_plans.sql").read_text(encoding="utf-8"),
     ]
 
     with psycopg2.connect(database_url) as connection:
@@ -33,7 +34,7 @@ def main():
                 cursor.execute(migration)
         connection.commit()
 
-        users, profiles, goals, checkins = fetch_memory_tables(connection)
+        users, profiles, goals, checkins, plans = fetch_memory_tables(connection)
 
     print(
         format_table_rows(
@@ -91,6 +92,22 @@ def main():
                 "details",
             ],
             rows=checkins,
+        )
+    )
+    print()
+    print(
+        format_table_rows(
+            title="workout_plans",
+            columns=[
+                "display_name",
+                "week_start",
+                "exercises",
+                "targets",
+                "intensity",
+                "plan_json",
+                "status",
+            ],
+            rows=plans,
         )
     )
 

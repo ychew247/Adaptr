@@ -6,7 +6,7 @@ This document breaks the project into modules so the hackathon build can be comp
 
 Build an adaptive fitness agent that:
 
-- Identifies each user by name.
+- Identifies each user by name plus a lightweight disambiguator so two users with the same name do not share memory.
 - Stores static fitness profile data separately for each user.
 - Stores adaptive health stats as dated time-series memory.
 - Generates targeted workout and rough nutrition plans.
@@ -45,10 +45,12 @@ Purpose: make the agent load the correct memory before giving advice.
 Workflow:
 
 1. Agent asks: "What name should I use for your fitness profile?"
-2. App searches `users` by normalized name.
-3. If the user exists, load their memory.
-4. If the user does not exist, create a new user row.
-5. Continue to static onboarding for new users or daily check-in for returning users.
+2. Agent asks for a lightweight secondary identifier, such as a PIN, passphrase, or email.
+3. App searches `users` by normalized name and disambiguator hash.
+4. If exactly one user matches, load their memory.
+5. If no user matches, create a new user row.
+6. If the name matches multiple profiles, ask for the disambiguator instead of silently loading the first row.
+7. Continue to static onboarding for new users or daily check-in for returning users.
 
 MVP table:
 
@@ -56,15 +58,19 @@ MVP table:
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   display_name STRING NOT NULL,
-  normalized_name STRING NOT NULL UNIQUE,
+  normalized_name STRING NOT NULL,
+  identity_hint STRING,
+  disambiguator_hash STRING NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (normalized_name, disambiguator_hash)
 );
 ```
 
 Completion target:
 
 - The agent can distinguish between users such as "Alex" and "Sam".
+- The agent can distinguish between two users who both enter "Alex".
 - Each user has separate profile, check-ins, plans, and decisions.
 
 ## 4. Module 2: Static Fitness Memory
@@ -221,9 +227,18 @@ CREATE TABLE daily_checkins (
   nutrition_adherence STRING,
   free_text_note STRING,
   checkin_details JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, checkin_date)
 );
 ```
+
+Check-in ordering policy:
+
+- For the MVP, the latest check-in per user per date wins.
+- If a user checks in twice on the same day, upsert the row and preserve the latest free-text note.
+- Trend calculations use one normalized daily row per date, ordered by `checkin_date DESC`.
+- Future versions can support multiple same-day check-ins with a `sequence` column, but the MVP avoids ambiguous duplicate rows.
 
 Completion target:
 
@@ -243,16 +258,89 @@ Inputs:
 - Pain flags
 - Workout completion
 
-Example rule set:
+Formula:
+
+1. Compute a personalized baseline for each adaptive metric using the user's own recent history.
+2. For cold starts, blend the personal baseline with population defaults so a new user still gets a stable score.
+3. Use exponential moving average (EMA) so recent check-ins matter more without ignoring older entries.
+4. Convert each metric into a z-score where positive always means "trending worse."
+5. Convert z-scores into smooth sigmoid penalties instead of hard binary thresholds.
+6. Combine penalties with weights.
+7. Apply pain as a hard gate after the score is calculated.
+
+Baseline blending:
 
 ```text
-Start at 100.
-Subtract 20 if sleep average over last 2 days is below 6 hours.
-Subtract 15 if stress is high.
-Subtract 15 if energy is low.
-Subtract 20 if soreness is high.
-Subtract 30 and trigger safety handling if pain notes mention sharp or worsening pain.
+mu_blend = (n / (n + k)) * mu_personal + (k / (n + k)) * mu_population
+sigma_blend = (n / (n + k)) * sigma_personal + (k / (n + k)) * sigma_population
 ```
+
+Starting constants:
+
+- `k = 5` for cold-start shrinkage.
+- Population sleep baseline: mean 7 hours, sigma 1 hour.
+- Population stress, energy, and soreness baseline: mean 3, sigma 1.
+- EMA alpha: `0.4`.
+
+Z-score:
+
+```text
+z_i = (EMA_i - mu_blend_i) / sigma_blend_i
+```
+
+Sign handling:
+
+- Sleep and energy are flipped because lower values are worse.
+- Stress and soreness are not flipped because higher values are worse.
+
+Smooth penalty:
+
+```text
+penalty_i = 1 / (1 + e^(-2 * (z_i - 0.5)))
+```
+
+Weights:
+
+| Metric   | Weight |
+|----------|--------|
+| Sleep    | 20     |
+| Stress   | 15     |
+| Energy   | 15     |
+| Soreness | 20     |
+
+Full score:
+
+```text
+deduction = 20 * penalty_sleep
+          + 15 * penalty_stress
+          + 15 * penalty_energy
+          + 20 * penalty_soreness
+
+interaction = 10 * penalty_sleep * penalty_soreness
+
+readiness = clip(100 - deduction - interaction, 0, 100)
+```
+
+Safety authority model:
+
+- Pain gates override the numeric score after the base readiness is calculated.
+- If the latest check-in mentions sharp, worsening, severe, or persistent pain, clamp readiness to at most `30`.
+- Trigger safety handling and log `pain_gate_applied = true`.
+- This prevents good sleep or nutrition from masking a serious pain signal.
+
+Implementation signature:
+
+```python
+def compute_readiness(user_history: list[dict], today_checkin: dict) -> dict:
+    ...
+```
+
+Returned fields:
+
+- `readiness_score`: score from 0 to 100.
+- `band`: route for plan adjustment.
+- `safety_triggered`: whether the pain gate fired.
+- `components`: z-scores, penalties, baselines, deduction, interaction, and pain-gate flag for decision logging.
 
 Readiness bands:
 
@@ -287,6 +375,10 @@ Workflow:
 3. Store the active week and the overall duration context.
 4. Link plan choices to goal, duration, and profile constraints.
 5. On check-in, adjust the current day's session if readiness is low.
+6. Promote commonly queried plan fields, such as exercise names, target muscles, and intensity band, alongside the full JSON plan.
+7. Archive the old active plan when generating a new active week.
+8. Use Ollama to generate the session content from profile, goal, readiness, and equipment context.
+9. Enforce readiness and safety constraints in Python after the model response, so the model cannot override a recovery or safety intensity band.
 
 MVP table:
 
@@ -296,11 +388,20 @@ CREATE TABLE workout_plans (
   user_id UUID NOT NULL REFERENCES users(id),
   goal_id UUID REFERENCES goals(id),
   week_start DATE NOT NULL,
+  exercise_names STRING[],
+  target_muscle_groups STRING[],
+  intensity_band STRING,
   plan_json JSONB NOT NULL,
   status STRING NOT NULL DEFAULT 'active',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
+
+JSONB policy:
+
+- `plan_json` stores the complete generated plan and can remain flexible.
+- Frequently queried fields are promoted into columns: `exercise_names`, `target_muscle_groups`, and `intensity_band`.
+- This lets the demo query plans without relying on brittle live JSON path expressions.
 
 Completion target:
 
@@ -325,6 +426,24 @@ Actions:
 - Replace an exercise.
 - Add mobility or recovery work.
 - Preserve weekly goal where possible.
+- Retrieve similar past memories before choosing the repair strategy.
+
+Implemented repair workflow:
+
+1. Load the active plan, latest check-in, profile, goal, and readiness result.
+2. Check idempotency before any model call. One `plan_repair` decision is allowed for each `(user_id, original_plan_id, trigger_date)`.
+3. Apply a deterministic safety and readiness action table:
+   - sharp, worsening, severe, or persistent pain: recovery substitution only;
+   - recovery band: recovery substitution;
+   - lighter band: lighter substitution;
+   - reduced band: reduced-volume substitution;
+   - missed session: reschedule without increasing weekly volume;
+   - limited time: shorten one session.
+4. Embed the repair trigger plus current plan state and retrieve similar prior `plan_repair` memories from `memory_embeddings`.
+5. Send the selected action, constraints, retrieved repair precedents, and any prior validation failure to Ollama. Ollama may suggest only the replacement-session wording and exercises; it cannot choose the safety action.
+6. Apply the edit deterministically and run the same full-plan hard validator as Module 6: equipment, injury/medical exclusions, pain gate, volume ceiling, intensity ceiling, and schedule limits.
+7. Retry one time with explicit validator feedback. If both attempts fail, leave the previous validated plan active and log a fallback decision.
+8. On success, archive the old active plan, save the repaired validated version, write an auditable `agent_decisions` row, and embed the successful repair as future precedent.
 
 Example:
 
@@ -333,28 +452,57 @@ User: I missed Push Day.
 Agent: I moved Push Day to Thursday, shortened Friday's session, and kept total weekly chest volume within range.
 ```
 
+Memory-backed repair example:
+
+```text
+Current check-in: high hamstring soreness and low sleep.
+Vector retrieval finds: "Last time hamstring soreness stayed high after sprint work, a deload plus hip mobility resolved it faster than simply cutting reps."
+Agent action: replace today's hamstring-heavy lower-body work with mobility, light posterior-chain accessories, and move sprint conditioning later in the week.
+```
+
 Completion target:
 
 - A missed workout changes the stored plan instead of only receiving encouragement.
+- At least one demo repair changes because a retrieved memory influenced the selected repair action.
 
 ## 10. Module 8: Nutrition Targets
 
-Purpose: support training without overbuilding a full diet app.
+Purpose: support training with deterministic, auditable targets rather than LLM-estimated nutrition numbers. This is planning guidance, not medical advice.
+
+### Inputs
+
+- Static profile: age, height, starting weight, and the user's selected BMR formula profile (`male` or `female`). This selection is stored once; the agent must never guess it.
+- Stored weekly availability and, when available, active-plan session frequency.
+- Active training goal, active workout plan, latest readiness band, and whether a workout is planned today.
+
+### Deterministic calculation rules
+
+1. Calculate BMR with Mifflin-St Jeor: male is `10 * weight_kg + 6.25 * height_cm - 5 * age + 5`; female is `10 * weight_kg + 6.25 * height_cm - 5 * age - 161`.
+2. Derive the TDEE activity factor from the stored plan frequency first, then `weekly_availability` if no plan frequency is available. Use `1.2` for 0 sessions, `1.375` for 1-3 sessions, `1.55` for 4-5 sessions, and `1.725` for 6-7 sessions. `TDEE = BMR * activity_factor`.
+3. Derive the calorie range from goal category: fat loss is `TDEE * 0.80` to `TDEE * 0.85`; maintenance and sport conditioning are `TDEE` to `TDEE`; muscle gain is `TDEE * 1.05` to `TDEE * 1.15`.
+4. Derive protein from body weight. Maintenance and muscle gain use `1.4-2.0 g/kg`; fat loss uses `2.0-2.4 g/kg` to better support lean-mass retention during a calorie deficit. The MVP stores the deterministic midpoint as `protein_g` and includes the full range in the human-facing note.
+5. Set hydration to `weight_kg * 0.033 L`, then add `0.5 L` when a workout is planned today.
+   The MVP fiber target is a fixed `30 g` for the male formula profile and `25 g` for the female formula profile.
+6. For a high-intensity planned session, add `100-150 kcal` to the calorie range and `0.4 L` (the fixed midpoint of the allowed `0.3-0.5 L` range) to hydration.
+7. A `recovery` readiness band never reduces calories. It only changes the human-facing note to acknowledge that a lighter appetite can be normal.
+8. Apply the non-negotiable calorie safety floor after calculation: `1500 kcal` minimum for the male formula profile and `1200 kcal` for the female formula profile. The maximum must never be lower than the final minimum.
+
+### Workflow
+
+1. Load profile, goal, active plan, latest check-in/readiness, and plan or availability frequency.
+2. Compute BMR, TDEE, calorie range, protein, hydration, and fiber deterministically in Python.
+3. Validate the numeric result: valid formula profile, positive values, correct safety floor, and `calories_max >= calories_min`.
+4. Give Ollama the computed values and constraints only. Ollama may create meal-timing suggestions, food ideas that respect diet preferences, and an adherence question; it cannot change the numeric targets.
+5. Store the validated daily nutrition target and the explanatory note in CockroachDB.
+6. At the next adaptive check-in, use the note to ask about nutrition adherence without requiring daily logging.
 
 MVP nutrition output:
 
-- Estimated calorie range
-- Protein target
+- Validated calorie range
+- Protein target with the calculation range in notes
 - Hydration target
-- Fiber/fruit/vegetable goal
-- Pre-workout or post-workout suggestion based on workout intensity
-
-Workflow:
-
-1. Calculate baseline nutrition target from static profile and goal.
-2. Adjust daily recommendation based on planned workout intensity.
-3. Store the daily nutrition target.
-4. Ask for adherence in the next check-in.
+- Fiber target
+- Pre-workout or post-workout suggestion based on the already-computed plan intensity
 
 MVP table:
 
@@ -367,6 +515,7 @@ CREATE TABLE nutrition_targets (
   calories_max INT,
   protein_g INT,
   hydration_l DECIMAL,
+  fiber_g INT,
   notes STRING,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -394,11 +543,18 @@ MVP table:
 CREATE TABLE agent_decisions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id),
+  checkin_id UUID,
+  plan_id UUID,
+  trigger_date DATE,
   decision_type STRING NOT NULL,
   reason STRING NOT NULL,
   data_used JSONB,
   plan_change JSONB,
   safety_flags STRING[],
+  validation_status STRING NOT NULL DEFAULT 'pending',
+  validation_notes JSONB,
+  retrieved_memory_ids UUID[],
+  generation_attempt INT NOT NULL DEFAULT 1,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -406,17 +562,20 @@ CREATE TABLE agent_decisions (
 Completion target:
 
 - The demo can show a timeline of agent decisions for a user.
+- Each major decision can be traced back to the specific check-in, plan, and retrieved memories that caused it.
+- A repair that failed validation can be shown as a fallback decision that intentionally preserved the prior valid plan.
 
 ## 12. Module 10: Vector Memory and Retrieval
 
 Purpose: let the agent retrieve relevant past context semantically.
 
-Use cases:
+Use cases:  
 
 - Find similar past weeks where the user had low sleep and high soreness.
 - Retrieve old notes mentioning knee pain, fatigue, or missed workouts.
 - Retrieve relevant fitness knowledge snippets before generating advice.
 - Compare current user state to prior successful weeks.
+- Branch plan repair based on what worked in a similar prior situation.
 
 Memory candidates for embeddings:
 
@@ -453,6 +612,7 @@ LIMIT 5;
 Completion target:
 
 - Before adjusting a plan, the agent can retrieve relevant memories instead of relying only on the latest message.
+- The demo includes one case where retrieved memory changes the chosen plan repair strategy.
 
 ## 13. Module 11: Fitness Knowledge Base
 
@@ -503,6 +663,7 @@ Demo actions:
 - Inspect schema.
 - Run read-only queries against users, check-ins, plans, and decisions.
 - Use MCP to verify stored agent memory after a conversation.
+- Show how one `agent_decisions` row links back to the `daily_checkins` row and active plan that caused it.
 
 Example demo query:
 
@@ -514,9 +675,26 @@ ORDER BY created_at DESC
 LIMIT 10;
 ```
 
+Agency proof query:
+
+```sql
+SELECT
+  d.decision_type,
+  d.reason,
+  c.free_text_note AS triggering_checkin,
+  d.data_used,
+  d.plan_change
+FROM agent_decisions AS d
+JOIN daily_checkins AS c ON c.id = d.checkin_id
+WHERE d.user_id = $1
+ORDER BY d.created_at DESC
+LIMIT 5;
+```
+
 Completion target:
 
 - Judges can see that the agent's memory is really stored in CockroachDB.
+- Judges can see that the agent's decisions are caused by stored user memory, not just seeded rows.
 
 ## 15. Module 13: CockroachDB Agent Skills Repo
 
@@ -634,10 +812,11 @@ Completion target:
 5. Generate Week 1 plan and nutrition targets.
 6. Show rows inserted into CockroachDB.
 7. Simulate a poor-recovery check-in: low sleep, high soreness, knee pain.
-8. Agent repairs the plan.
-9. Show the decision log explaining why the plan changed.
-10. Show vector retrieval finding a similar prior memory or relevant knowledge snippet.
-11. Run MCP queries to inspect the stored data.
+8. Agent checks safety flags before readiness scoring.
+9. Agent retrieves a similar prior memory or relevant knowledge snippet.
+10. Agent repairs the plan using the current check-in plus retrieved memory.
+11. Show the decision log explaining why the plan changed.
+12. Run MCP queries that link the decision row back to the triggering check-in and plan.
 
 ## 20. MVP Definition
 

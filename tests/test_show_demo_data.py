@@ -22,6 +22,17 @@ class FakeCursor:
                     {"parser": "ollama"},
                 )
             ],
+            [
+                (
+                    "Alex",
+                    "2026-08-03",
+                    ["landmine press", "badminton footwork intervals"],
+                    ["upper_body"],
+                    "normal",
+                    {"week_number": 1},
+                    "active",
+                )
+            ],
         ]
 
     def __enter__(self):
@@ -81,7 +92,7 @@ def test_format_table_rows_handles_empty_rows():
 def test_fetch_memory_tables_returns_users_profiles_goals_and_checkins():
     connection = FakeConnection()
 
-    users, profiles, goals, checkins = fetch_memory_tables(connection)
+    users, profiles, goals, checkins, plans = fetch_memory_tables(connection)
 
     assert users == [("user-1", "Alex", "alex", "2026-08-01")]
     assert profiles == [("Alex", 25, 175, 72, "intermediate", ["full gym"], "4 days", "lightly active")]
@@ -100,4 +111,15 @@ def test_fetch_memory_tables_returns_users_profiles_goals_and_checkins():
             {"parser": "ollama"},
         )
     ]
-    assert len(connection.cursor_instance.queries) == 4
+    assert plans == [
+        (
+            "Alex",
+            "2026-08-03",
+            ["landmine press", "badminton footwork intervals"],
+            ["upper_body"],
+            "normal",
+            {"week_number": 1},
+            "active",
+        )
+    ]
+    assert len(connection.cursor_instance.queries) == 5

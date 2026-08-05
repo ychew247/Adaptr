@@ -75,6 +75,10 @@ class StaticProfileService:
                 "Current activity level. Choose sedentary, lightly active, "
                 "moderately active, or very active:"
             ),
+            "bmr_formula_profile": ask(
+                "For the Mifflin-St Jeor BMR formula, choose male or female. "
+                "This is used only for the formula and is never guessed:"
+            ).strip().lower(),
         }
 
         self.repository.upsert_profile(profile)

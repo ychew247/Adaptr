@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   medical_constraints STRING,
   diet_preferences STRING,
   activity_level STRING,
+  bmr_formula_profile STRING,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

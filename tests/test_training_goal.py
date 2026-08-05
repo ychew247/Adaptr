@@ -1,4 +1,4 @@
-from src.training_goal import TrainingGoalService, build_follow_up_prompt, parse_training_goal
+from src.m3_training_goal import TrainingGoalService, build_follow_up_prompt, parse_training_goal
 
 
 class FakeGoalRepository:
@@ -112,3 +112,23 @@ def test_goal_setup_skips_existing_active_goal():
     assert messages == [
         "I already have Alex's active training goal. Next I will ask for adaptive check-in details."
     ]
+
+
+def test_goal_setup_replaces_an_existing_goal_when_explicitly_requested():
+    repository = FakeGoalRepository()
+    repository.upsert_active_goal({"user_id": "user-1", "goal_type": "fat_loss"})
+    service = TrainingGoalService(repository)
+
+    service.run_goal_setup(
+        user={"id": "user-1", "display_name": "Alex"},
+        ask=lambda prompt: (
+            "I am a badminton athlete and want better VO2 max while staying lean over 12 weeks"
+        ),
+        say=lambda message: None,
+        replace_existing=True,
+    )
+
+    saved = repository.find_active_by_user_id("user-1")
+    assert saved["goal_type"] == "sport_conditioning"
+    assert saved["goal_details"]["athlete_type"] == "badminton"
+    assert saved["plan_duration_weeks"] == 12

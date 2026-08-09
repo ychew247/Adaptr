@@ -36,6 +36,7 @@ from src.ollama_nutrition_note_generator import OllamaNutritionNoteGenerator
 from src.m8_nutrition_service import NutritionTargetService
 from src.m9_decision_log import DecisionLogService
 from src.m11_fitness_knowledge import parse_fitness_knowledge_files, seed_fitness_knowledge
+from src.agent_flow import AdaptiveFitnessAgent
 
 
 MIGRATIONS = [
@@ -62,7 +63,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run one fitness-agent module without replaying the full demo flow."
     )
-    parser.add_argument("--module", choices=["2", "3", "4", "5", "6", "7", "8", "11"], required=True)
+    parser.add_argument("--module", choices=["2", "3", "4", "5", "6", "7", "8", "11", "agent"], required=True)
     parser.add_argument("--user", default="Alex")
     parser.add_argument("--deterministic-plan", action="store_true")
     parser.add_argument(
@@ -122,7 +123,8 @@ def main():
         checkin_repository = CockroachCheckinRepository(connection)
         plan_repository = CockroachWorkoutPlanRepository(connection)
         nutrition_repository = CockroachNutritionTargetRepository(connection)
-        decision_log = DecisionLogService(CockroachAgentDecisionRepository(connection))
+        decision_repository = CockroachAgentDecisionRepository(connection)
+        decision_log = DecisionLogService(decision_repository)
 
         if args.module == "11":
             ollama_client = OllamaClient()
@@ -164,6 +166,63 @@ def main():
 
         _ensure_profile(user, profile_repository)
         _ensure_goal(user, goal_repository)
+
+        if args.module == "agent":
+            ollama_client = OllamaClient()
+            memory_repository = CockroachMemoryEmbeddingRepository(connection)
+            verify_embedding_dimension(ollama_client, memory_repository)
+            agent = AdaptiveFitnessAgent(
+                checkin_service=AdaptiveCheckinService(
+                    checkin_repository,
+                    OllamaCheckinParser(ollama_client),
+                ),
+                checkin_repository=checkin_repository,
+                plan_repository=plan_repository,
+                decision_log=decision_log,
+                plan_service=HybridWorkoutPlanService(
+                    profile_repository=profile_repository,
+                    goal_repository=goal_repository,
+                    checkin_repository=checkin_repository,
+                    plan_repository=plan_repository,
+                    memory_repository=memory_repository,
+                    embedder=ollama_client,
+                    plan_generator=(
+                        DeterministicWorkoutPlanGenerator()
+                        if args.deterministic_plan
+                        else OllamaWorkoutPlanGenerator(ollama_client)
+                    ),
+                    decision_log=decision_log,
+                ),
+                repair_service=PlanRepairService(
+                    profile_repository=profile_repository,
+                    goal_repository=goal_repository,
+                    checkin_repository=checkin_repository,
+                    plan_repository=plan_repository,
+                    decision_repository=decision_repository,
+                    decision_log=decision_log,
+                    memory_repository=memory_repository,
+                    embedder=ollama_client,
+                    repair_generator=OllamaPlanRepairGenerator(ollama_client),
+                ),
+                nutrition_service=NutritionTargetService(
+                    profile_repository=profile_repository,
+                    goal_repository=goal_repository,
+                    checkin_repository=checkin_repository,
+                    plan_repository=plan_repository,
+                    nutrition_repository=nutrition_repository,
+                    note_generator=OllamaNutritionNoteGenerator(ollama_client),
+                    decision_log=decision_log,
+                ),
+            )
+            result = agent.run_daily_flow(
+                user,
+                workout_today=args.workout_today,
+                formula_profile=args.bmr_formula_profile,
+            )
+            print(result["summary"])
+            print(f"Plan action: {result['action']}")
+            print(f"Nutrition target: {result['nutrition']}")
+            return
 
         if args.module == "4":
             AdaptiveCheckinService(
@@ -225,7 +284,7 @@ def main():
                 goal_repository=goal_repository,
                 checkin_repository=checkin_repository,
                 plan_repository=plan_repository,
-                decision_repository=CockroachAgentDecisionRepository(connection),
+                decision_repository=decision_repository,
                 decision_log=decision_log,
                 memory_repository=memory_repository,
                 embedder=ollama_client,

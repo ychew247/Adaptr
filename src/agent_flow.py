@@ -47,6 +47,7 @@ class AdaptiveFitnessAgent:
         user: Mapping[str, Any],
         *,
         workout_today: bool,
+        formula_profile: str | None = None,
         ask=input,
         say=print,
     ) -> AgentFlowResult:
@@ -68,6 +69,7 @@ class AdaptiveFitnessAgent:
         nutrition = self.nutrition_service.run_daily_target(
             user,
             workout_today=workout_today,
+            formula_profile=formula_profile,
             readiness=readiness,
             parent_decision_id=parent_decision_id,
         )

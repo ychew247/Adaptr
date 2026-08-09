@@ -553,6 +553,21 @@ Completion target:
 
 - The diet feature supports the workout plan without pretending to be medical nutrition therapy.
 
+### Complete Agent Conversation Flow
+
+The GUI and the `--module agent` CLI command use one connected daily flow:
+
+```text
+M4 save check-in -> M5 assess + M9 log -> deterministic plan route -> M6/M7 validated write -> M8 target + M9 log -> GUI response
+```
+
+- A saved check-in always receives one readiness decision.
+- No active plan triggers Module 6 generation.
+- Readiness below `80`, a pain gate, a missed session, or a time-limit signal triggers Module 7 repair automatically.
+- A `train_as_planned` check-in keeps the active plan unchanged.
+- Module 8 always uses the same readiness decision and the final active-plan state.
+- The returned result contains the saved check-in, readiness, action, plan summary, nutrition target, and a concise user-facing summary.
+
 ## 11. Module 9: Decision Logging
 
 Purpose: prove the agent has auditable memory.

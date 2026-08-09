@@ -44,6 +44,17 @@ def test_run_module_script_accepts_module11_without_running_live_dependencies():
     assert "Direct module runner imports successfully." in result.stdout
 
 
+def test_run_module_script_accepts_complete_agent_flow_without_live_dependencies():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_module.py", "--module", "agent", "--skip-live"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Direct module runner imports successfully." in result.stdout
+
+
 def test_run_module_script_accepts_replace_goal_option_without_running_live_dependencies():
     result = subprocess.run(
         [

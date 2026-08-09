@@ -179,3 +179,17 @@ def test_result_is_gui_ready():
 
     assert set(result) == {"checkin", "readiness", "action", "plan", "nutrition", "summary"}
     assert "85" in result["summary"]
+
+
+def test_formula_profile_is_forwarded_to_nutrition():
+    readiness = {"readiness_score": 85, "band": "train_as_planned", "safety_triggered": False}
+    agent, _, _, nutrition = _build_agent(readiness)
+
+    agent.run_daily_flow(
+        USER,
+        workout_today=True,
+        formula_profile="male",
+        ask=lambda _: "Feeling good.",
+    )
+
+    assert nutrition.calls[0]["formula_profile"] == "male"

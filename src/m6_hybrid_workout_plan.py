@@ -63,7 +63,15 @@ class HybridWorkoutPlanService:
         self.plan_generator = plan_generator
         self.decision_log = decision_log
 
-    def run_plan_generation(self, user: Mapping[str, Any], say=print) -> str:
+    def run_plan_generation(
+        self,
+        user: Mapping[str, Any],
+        *,
+        readiness: Mapping[str, Any] | None = None,
+        latest_checkin: Mapping[str, Any] | None = None,
+        parent_decision_id: str | None = None,
+        say=print,
+    ) -> str:
         profile = self.profile_repository.find_by_user_id(user["id"])
         if profile is None:
             raise PlanGenerationError("Static profile is missing. Run Module 2 first.")
@@ -72,8 +80,8 @@ class HybridWorkoutPlanService:
             raise PlanGenerationError("Active goal is missing. Run Module 3 first.")
 
         checkins = self.checkin_repository.find_recent_by_user_id(user["id"], limit=30)
-        latest_checkin = checkins[0] if checkins else {}
-        readiness = _readiness_from_checkins(checkins)
+        latest_checkin = latest_checkin or (checkins[0] if checkins else {})
+        readiness = readiness or _readiness_from_checkins(checkins)
         constraints = derive_plan_constraints(profile, goal, readiness, latest_checkin)
         past_plans = self._past_plans(user["id"])
         query_text = _retrieval_query(profile, goal, latest_checkin, readiness)
@@ -137,9 +145,11 @@ class HybridWorkoutPlanService:
                 )
                 self._store_plan_memory(user["id"], saved_plan, plan_json)
                 if self.decision_log is not None and latest_checkin.get("id"):
-                    readiness_decision = self.decision_log.log_readiness_assessment(
-                        user_id=user["id"], checkin=latest_checkin, readiness=readiness
-                    )
+                    if parent_decision_id is None:
+                        readiness_decision = self.decision_log.log_readiness_assessment(
+                            user_id=user["id"], checkin=latest_checkin, readiness=readiness
+                        )
+                        parent_decision_id = readiness_decision.get("id")
                     self.decision_log.log_plan_generation(
                         user_id=user["id"],
                         plan=saved_plan,
@@ -149,7 +159,7 @@ class HybridWorkoutPlanService:
                         validation=validation,
                         retrieved_memory_ids=retrieved_memory_ids,
                         generation_attempt=attempt,
-                        parent_decision_id=readiness_decision.get("id"),
+                        parent_decision_id=parent_decision_id,
                     )
                 say(f"Saved {user['display_name']}'s validated Week {plan_json['week_number']} workout plan.")
                 return "plan_ready"

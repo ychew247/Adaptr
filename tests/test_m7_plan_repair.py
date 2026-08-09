@@ -287,3 +287,26 @@ def test_repair_logs_the_decision_with_its_readiness_parent():
 
     assert decisions.readiness_calls[0]["checkin"]["id"] == "checkin-1"
     assert decisions.repair_calls[0]["parent_decision_id"] == "readiness-decision-1"
+
+
+def test_repair_uses_shared_readiness_without_duplicate_log():
+    decisions = DecisionLog()
+    readiness = {
+        "readiness_score": 65,
+        "band": "reduce_volume",
+        "safety_triggered": False,
+        "components": {"source": "agent_flow"},
+    }
+    service = _service(RetryingRepairGenerator(), decision_log=decisions)
+
+    assert service.run_repair(
+        {"id": "user-1", "display_name": "Alex"},
+        trigger_text="Automatic readiness adjustment.",
+        trigger_date="2026-08-04",
+        readiness=readiness,
+        latest_checkin=CHECKIN,
+        parent_decision_id="flow-readiness-1",
+    ) == "repair_applied"
+
+    assert decisions.readiness_calls == []
+    assert decisions.repair_calls[0]["parent_decision_id"] == "flow-readiness-1"

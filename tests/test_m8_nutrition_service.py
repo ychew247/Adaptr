@@ -59,3 +59,28 @@ def test_nutrition_service_logs_the_saved_target_with_its_readiness_parent():
     assert decisions.readiness_calls[0]["checkin"]["id"] == "checkin-1"
     assert decisions.nutrition_calls[0]["nutrition_target"]["id"] == "target-1"
     assert decisions.nutrition_calls[0]["parent_decision_id"] == "readiness-decision-1"
+
+
+def test_nutrition_service_uses_shared_readiness_without_duplicate_log():
+    decisions = DecisionLog()
+    readiness = {
+        "readiness_score": 65,
+        "band": "reduce_volume",
+        "safety_triggered": False,
+        "components": {"source": "agent_flow"},
+    }
+    service = NutritionTargetService(
+        ProfileRepository(), GoalRepository(), CheckinRepository(), PlanRepository(),
+        NutritionRepository(), decision_log=decisions,
+    )
+
+    service.run_daily_target(
+        {"id": "user-1"},
+        workout_today=True,
+        readiness=readiness,
+        parent_decision_id="flow-readiness-1",
+    )
+
+    assert decisions.readiness_calls == []
+    assert decisions.nutrition_calls[0]["readiness_band"] == "reduce_volume"
+    assert decisions.nutrition_calls[0]["parent_decision_id"] == "flow-readiness-1"

@@ -235,3 +235,34 @@ def test_hybrid_service_logs_validated_plan_with_its_readiness_parent():
     assert decisions.readiness_calls[0]["checkin"]["id"] == "checkin-1"
     assert decisions.plan_calls[0]["plan"]["id"] == "plan-1"
     assert decisions.plan_calls[0]["parent_decision_id"] == "readiness-decision-1"
+
+
+def test_hybrid_service_uses_shared_readiness_without_duplicate_log():
+    decisions = DecisionLog()
+    readiness = {
+        "readiness_score": 85,
+        "band": "train_as_planned",
+        "safety_triggered": False,
+        "components": {"source": "agent_flow"},
+    }
+    service = HybridWorkoutPlanService(
+        profile_repository=FixedRepository(PROFILE),
+        goal_repository=FixedRepository(GOAL),
+        checkin_repository=CheckinRepository(),
+        plan_repository=PlanRepository(),
+        memory_repository=MemoryRepository(),
+        embedder=Embedder(),
+        plan_generator=RetryingGenerator(),
+        decision_log=decisions,
+    )
+
+    assert service.run_plan_generation(
+        {"id": "user-1", "display_name": "Alex"},
+        readiness=readiness,
+        latest_checkin=CHECKIN,
+        parent_decision_id="flow-readiness-1",
+    ) == "plan_ready"
+
+    assert decisions.readiness_calls == []
+    assert decisions.plan_calls[0]["readiness"] == readiness
+    assert decisions.plan_calls[0]["parent_decision_id"] == "flow-readiness-1"

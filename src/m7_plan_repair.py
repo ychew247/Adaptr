@@ -67,6 +67,9 @@ class PlanRepairService:
         *,
         trigger_text: str,
         trigger_date: str | None = None,
+        readiness: Mapping[str, Any] | None = None,
+        latest_checkin: Mapping[str, Any] | None = None,
+        parent_decision_id: str | None = None,
         say=print,
     ) -> str:
         active_plan = self.plan_repository.find_active_by_user_id(user["id"])
@@ -85,8 +88,8 @@ class PlanRepairService:
         if profile is None or goal is None:
             raise PlanRepairError("Static profile and active goal are required before repair.")
         checkins = self.checkin_repository.find_recent_by_user_id(user["id"], limit=30)
-        latest_checkin = checkins[0] if checkins else {}
-        readiness = _readiness_from_checkins(checkins)
+        latest_checkin = latest_checkin or (checkins[0] if checkins else {})
+        readiness = readiness or _readiness_from_checkins(checkins)
         constraints = derive_plan_constraints(profile, goal, readiness, latest_checkin)
         repair_action = determine_repair_action(readiness, trigger_text)
         retrieval_embedding = self.embedder.embed(
@@ -136,6 +139,7 @@ class PlanRepairService:
                     retrieved_memories,
                     validation,
                     attempt,
+                    parent_decision_id,
                     say,
                 )
 
@@ -157,6 +161,7 @@ class PlanRepairService:
             retrieved_memory_ids,
             last_validation or {},
             readiness,
+            parent_decision_id,
         )
         say("Repair could not pass validation, so the prior validated plan remains active.")
         return "repair_fallback"
@@ -173,6 +178,7 @@ class PlanRepairService:
         retrieved_memories: Sequence[Mapping[str, Any]],
         validation: Mapping[str, Any],
         attempt: int,
+        parent_decision_id: str | None,
         say: Any,
     ) -> str:
         candidate_plan["validation"] = validation
@@ -218,7 +224,10 @@ class PlanRepairService:
             "generation_attempt": attempt,
         }
         decision = self._log_repair_decision(
-            decision_payload, latest_checkin, candidate_plan["readiness"]
+            decision_payload,
+            latest_checkin,
+            candidate_plan["readiness"],
+            parent_decision_id,
         )
         self._store_repair_memory(user["id"], decision, candidate_plan)
         say(f"Saved {user['display_name']}'s validated plan repair.")
@@ -235,6 +244,7 @@ class PlanRepairService:
         retrieved_memory_ids: list[Any],
         validation: Mapping[str, Any],
         readiness: Mapping[str, Any],
+        parent_decision_id: str | None,
     ) -> None:
         payload = {
             "user_id": user["id"],
@@ -251,19 +261,19 @@ class PlanRepairService:
             "retrieved_memory_ids": retrieved_memory_ids,
             "generation_attempt": MAX_REPAIR_ATTEMPTS,
         }
-        self._log_repair_decision(payload, latest_checkin, readiness)
+        self._log_repair_decision(payload, latest_checkin, readiness, parent_decision_id)
 
     def _log_repair_decision(
         self,
         payload: Mapping[str, Any],
         latest_checkin: Mapping[str, Any],
         readiness: Mapping[str, Any],
+        parent_decision_id: str | None = None,
     ) -> Mapping[str, Any]:
         if self.decision_log is None:
             return self.decision_repository.create_repair_decision(dict(payload))
 
-        parent_decision_id = None
-        if latest_checkin.get("id"):
+        if parent_decision_id is None and latest_checkin.get("id"):
             parent_decision = self.decision_log.log_readiness_assessment(
                 user_id=payload["user_id"], checkin=latest_checkin, readiness=readiness
             )

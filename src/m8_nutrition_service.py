@@ -30,6 +30,8 @@ class NutritionTargetService:
         user: dict[str, Any],
         workout_today: bool,
         formula_profile: str | None = None,
+        readiness: dict[str, Any] | None = None,
+        parent_decision_id: str | None = None,
     ) -> dict[str, Any]:
         profile = self.profile_repository.find_by_user_id(user["id"])
         if formula_profile:
@@ -42,10 +44,10 @@ class NutritionTargetService:
         goal = self.goal_repository.find_active_by_user_id(user["id"])
         active_plan = self.plan_repository.find_active_by_user_id(user["id"])
         checkins = self.checkin_repository.find_recent_by_user_id(user["id"], limit=30)
-        readiness = None
         readiness_band = None
-        if checkins:
+        if readiness is None and checkins:
             readiness = compute_readiness(list(reversed(checkins[1:])), checkins[0])
+        if readiness is not None:
             readiness_band = readiness["band"]
 
         targets = calculate_nutrition_targets(
@@ -69,8 +71,7 @@ class NutritionTargetService:
             }
         )
         if self.decision_log is not None:
-            parent_decision_id = None
-            if readiness is not None:
+            if parent_decision_id is None and readiness is not None and checkins:
                 readiness_decision = self.decision_log.log_readiness_assessment(
                     user_id=user["id"], checkin=checkins[0], readiness=readiness
                 )

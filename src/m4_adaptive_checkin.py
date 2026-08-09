@@ -55,13 +55,13 @@ class AdaptiveCheckinService:
             "free_text_note": answer,
             "checkin_details": parsed["checkin_details"],
         }
-        self.repository.create_checkin(checkin)
+        saved_checkin = self.repository.create_checkin(checkin)
 
         say(
             f"Saved {user['display_name']}'s adaptive check-in. "
             "Next I can calculate readiness and adjust the plan."
         )
-        return "readiness_score"
+        return saved_checkin
 
 
 def _latest_body_issue(recent_checkins):

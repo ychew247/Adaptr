@@ -55,6 +55,18 @@ class CockroachCheckinRepository:
                   checkin_details
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, checkin_date) DO UPDATE SET
+                  sleep_hours = EXCLUDED.sleep_hours,
+                  stress_level = EXCLUDED.stress_level,
+                  energy_level = EXCLUDED.energy_level,
+                  soreness_level = EXCLUDED.soreness_level,
+                  sore_muscle_groups = EXCLUDED.sore_muscle_groups,
+                  pain_notes = EXCLUDED.pain_notes,
+                  weight_kg = EXCLUDED.weight_kg,
+                  workout_completed = EXCLUDED.workout_completed,
+                  nutrition_adherence = EXCLUDED.nutrition_adherence,
+                  free_text_note = EXCLUDED.free_text_note,
+                  checkin_details = EXCLUDED.checkin_details
                 RETURNING
                   id,
                   user_id,

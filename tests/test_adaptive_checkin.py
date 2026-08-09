@@ -72,7 +72,7 @@ def test_adaptive_checkin_service_saves_one_freeform_checkin():
         say=messages.append,
     )
 
-    assert result == "readiness_score"
+    assert result["user_id"] == "user-1"
     assert len(prompts) == 1
     assert len(repository.saved_checkins) == 1
     saved = repository.saved_checkins[0]

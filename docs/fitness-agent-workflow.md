@@ -407,6 +407,34 @@ Completion target:
 
 - The agent can create a different duration-aware plan for each goal and revise the active plan when new adaptive memory arrives.
 
+### Workout Plan Excel Export
+
+Purpose: let the user take the current workout plan out of the agent without
+mixing workout sessions with profile, nutrition, memory, or audit data.
+
+Workflow:
+
+1. User requests an export for their saved profile name.
+2. The export command loads that user's latest `active` workout plan.
+3. It refuses to export unless `validation_status` is `validated`.
+4. It writes one `.xlsx` workbook containing one `Sessions` sheet only.
+5. The sheet contains `Day`, `Focus`, `Exercises`, `Sets/Reps`, and
+   `Adjustment`, with one row per planned session.
+6. A Module 7 repair archives the old plan and saves a repaired active plan;
+   rerunning the export command therefore exports the repaired plan.
+
+Command:
+
+```powershell
+python scripts/export_workout_plan.py --user yu
+```
+
+Default output:
+
+```text
+exports/yu_latest_workout_plan.xlsx
+```
+
 ## 9. Module 7: Plan Repair
 
 Purpose: make the agent complete tasks, not just respond.
@@ -439,8 +467,8 @@ Implemented repair workflow:
    - reduced band: reduced-volume substitution;
    - missed session: reschedule without increasing weekly volume;
    - limited time: shorten one session.
-4. Embed the repair trigger plus current plan state and retrieve similar prior `plan_repair` memories from `memory_embeddings`.
-5. Send the selected action, constraints, retrieved repair precedents, and any prior validation failure to Ollama. Ollama may suggest only the replacement-session wording and exercises; it cannot choose the safety action.
+4. Embed the repair trigger plus current plan state and retrieve similar prior `plan_repair` memories plus global `fitness_knowledge` snippets from `memory_embeddings`.
+5. Send the selected action, constraints, retrieved repair precedents, relevant knowledge snippets, and any prior validation failure to Ollama. Ollama may suggest only the replacement-session wording and exercises; it cannot choose the safety action.
 6. Apply the edit deterministically and run the same full-plan hard validator as Module 6: equipment, injury/medical exclusions, pain gate, volume ceiling, intensity ceiling, and schedule limits.
 7. Retry one time with explicit validator feedback. If both attempts fail, leave the previous validated plan active and log a fallback decision.
 8. On success, archive the old active plan, save the repaired validated version, write an auditable `agent_decisions` row, and embed the successful repair as future precedent.
@@ -529,13 +557,15 @@ Completion target:
 
 Purpose: prove the agent has auditable memory.
 
-Every major action should record:
+Decision taxonomy:
 
-- What the agent decided.
-- Why it decided that.
-- What data it used.
-- What changed.
-- Whether a safety rule was triggered.
+- `readiness_assessment`
+- `plan_generation`
+- `plan_repair`
+- `nutrition_target`
+- `weekly_replan`
+
+Every decision records what the agent did, why it did it, the stored data used, what changed, validation evidence, and any safety flag. New decision labels must be added deliberately in the shared `DecisionLogService`; modules must not invent free-form labels.
 
 MVP table:
 
@@ -547,6 +577,8 @@ CREATE TABLE agent_decisions (
   plan_id UUID,
   trigger_date DATE,
   decision_type STRING NOT NULL,
+  idempotency_key STRING,
+  parent_decision_id UUID,
   reason STRING NOT NULL,
   data_used JSONB,
   plan_change JSONB,
@@ -559,15 +591,68 @@ CREATE TABLE agent_decisions (
 );
 ```
 
+Workflow:
+
+1. Module 5, 6, 7, or 8 completes its deterministic calculation or validated action.
+2. The module calls the corresponding `DecisionLogService` method rather than writing SQL directly.
+3. The service validates the decision type, derives an event-specific idempotency key, and checks CockroachDB for an existing matching row.
+4. A duplicate event returns the existing row without another write. A deliberate later event has a different key and is allowed.
+5. The service writes the row and returns its ID. A resulting plan, repair, or nutrition row can save that ID as `parent_decision_id` to form a traceable chain.
+
+Idempotency policy:
+
+- One readiness decision per saved check-in.
+- One plan-generation decision per saved plan.
+- One repair per original plan per trigger date.
+- One nutrition decision per saved nutrition target.
+- One weekly replan per plan and week start.
+
+Service interface:
+
+```python
+class DecisionLogService:
+    def log_readiness_assessment(self, *, user_id, checkin, readiness) -> dict: ...
+    def log_plan_generation(self, *, user_id, plan, checkin, readiness, ...) -> dict: ...
+    def log_plan_repair(self, *, user_id, original_plan_id, trigger_date, ...) -> dict: ...
+    def log_nutrition_target(self, *, user_id, nutrition_target, targets, ...) -> dict: ...
+    def timeline_for_user(self, user_id, limit=20) -> list[dict]: ...
+```
+
+Timeline query:
+
+```sql
+SELECT
+  decision_type,
+  reason,
+  trigger_date,
+  validation_status,
+  parent_decision_id,
+  created_at
+FROM agent_decisions
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT 20;
+```
+
+`agent_decisions_user_created_idx (user_id, created_at DESC)` serves this timeline read.
+
 Completion target:
 
 - The demo can show a timeline of agent decisions for a user.
 - Each major decision can be traced back to the specific check-in, plan, and retrieved memories that caused it.
 - A repair that failed validation can be shown as a fallback decision that intentionally preserved the prior valid plan.
+- At minimum, `readiness_assessment`, `plan_generation`, and `plan_repair` are written and queryable. Module 8 also records `nutrition_target` for a complete daily explanation.
 
 ## 12. Module 10: Vector Memory and Retrieval
 
-Purpose: let the agent retrieve relevant past context semantically.
+Purpose: retrieve relevant persistent context semantically before plan generation or repair. The core pipeline is already implemented by Modules 6 and 7; Module 10 formalizes its retrieval policy and auditability.
+
+Implementation status:
+
+- Before vector retrieval, the app probes the active Ollama embedding model and creates or verifies `memory_embeddings` using its actual `VECTOR(dimension)`. It does not assume `VECTOR(1536)`.
+- `memory_embeddings` already has a CockroachDB cosine `VECTOR INDEX` on user and embedding.
+- Module 6 embeds the latest daily note and each validated plan. Module 7 embeds every successful validated repair as an agent-decision precedent.
+- The plan and decision audit rows store `retrieved_memory_ids`, so the demo can show the exact CockroachDB rows that influenced an output.
 
 Use cases:  
 
@@ -577,24 +662,51 @@ Use cases:
 - Compare current user state to prior successful weeks.
 - Branch plan repair based on what worked in a similar prior situation.
 
+Source types:
+
+- `daily_note`
+- `agent_decision`
+- `weekly_summary`
+- `fitness_knowledge`
+- `goal_description`
+- `validated_plan`
+
+The application validates this fixed vocabulary before writing. This prevents mismatches such as `checkin` versus `check_in` from silently excluding relevant rows.
+
+Retrieval rules:
+
+1. Search the current user's personal memories from the last 12 weeks.
+2. Also include global `fitness_knowledge` rows, stored with `user_id IS NULL`; these are not user-specific and are not limited by the personal-memory window.
+3. Keep only rows with cosine distance below `0.40`.
+4. Rank by closest distance, then most recent `created_at` when distances tie.
+5. If no row passes the cutoff, send no precedent to Ollama. The agent must not treat an unrelated memory as evidence.
+
 Memory candidates for embeddings:
 
-- Free-text daily notes.
-- Agent decision reasons.
-- Weekly summaries.
-- Fitness knowledge snippets.
-- Goal descriptions.
+- Free-text daily notes (`daily_note`).
+- Agent decision reasons and successful repairs (`agent_decision`).
+- Weekly summaries (`weekly_summary`).
+- Fitness knowledge snippets (`fitness_knowledge`).
+- Goal descriptions (`goal_description`).
+- Validated plans (`validated_plan`).
+
+Write-back rules:
+
+1. Never embed or retrieve an unvalidated workout plan.
+2. After Module 6 validation, store the validated plan as `validated_plan` memory.
+3. After a successful Module 7 repair, store the repair decision as `agent_decision` memory.
+4. Future weekly summaries and curated knowledge use the same repository; global knowledge has no user ID.
 
 MVP table:
 
 ```sql
 CREATE TABLE memory_embeddings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES users(id),
+  user_id UUID REFERENCES users(id), -- NULL only for shared fitness knowledge
   source_type STRING NOT NULL,
   source_id UUID,
   content STRING NOT NULL,
-  embedding VECTOR(1536),
+  embedding VECTOR(actual_ollama_dimension),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
@@ -602,17 +714,26 @@ CREATE TABLE memory_embeddings (
 Example retrieval:
 
 ```sql
-SELECT content
+SELECT id, source_type, memory_text, embedding <=> $3 AS distance
 FROM memory_embeddings
-WHERE user_id = $1
-ORDER BY embedding <-> $2
+WHERE (
+  (user_id = $1 AND created_at >= $2)
+  OR user_id IS NULL
+)
+AND embedding <=> $3 < 0.40
+ORDER BY embedding <=> $3, created_at DESC
 LIMIT 5;
 ```
+
+Production note:
+
+- The current CockroachDB vector index is suitable for this demo and avoids a plain nearest-neighbor table scan for the user-scoped path.
+- A larger deployment should benchmark index behavior for global knowledge, tune the distance cutoff by embedding model, and add or adjust indexes as memory volume grows.
 
 Completion target:
 
 - Before adjusting a plan, the agent can retrieve relevant memories instead of relying only on the latest message.
-- The demo includes one case where retrieved memory changes the chosen plan repair strategy.
+- The demo includes one case where retrieved memory changes the chosen plan repair strategy, and points to the exact IDs saved in `retrieved_memory_ids`.
 
 ## 13. Module 11: Fitness Knowledge Base
 
@@ -630,10 +751,18 @@ Knowledge categories:
 
 Workflow:
 
-1. Store short trusted snippets in `fitness_knowledge`.
-2. Embed each snippet into `memory_embeddings` or a dedicated vector table.
-3. Retrieve relevant snippets during planning.
-4. Make the agent state uncertainty and ask follow-up questions when needed.
+1. Keep curated snippets in both `docs/fitness-knowledge-snippets.md` and
+   `docs/sport-specific-knowledge-snippets.md`.
+2. Parse each Markdown section into a stable topic, content, source, URL, and use case.
+3. Upsert each snippet into `fitness_knowledge` by topic.
+4. Embed each snippet into the existing `memory_embeddings` table with `source_type = 'fitness_knowledge'` and `user_id IS NULL`.
+5. Retrieve relevant snippets during workout planning and repair alongside personal memories.
+6. Sport selection is semantic, not hardcoded: profile, goal, check-in, and
+   constraints become the retrieval query, so CockroachDB vector search selects
+   nearby badminton or futsal guidance while excluding unrelated sport snippets
+   outside the distance cutoff.
+7. Keep deterministic guardrails authoritative: knowledge can guide Ollama wording and exercise selection, but it cannot override readiness, pain, equipment, injury, calorie, protein, or validation rules.
+8. Make the agent state uncertainty and ask follow-up questions when needed.
 
 MVP table:
 
@@ -651,6 +780,11 @@ CREATE TABLE fitness_knowledge (
 Completion target:
 
 - The agent combines user memory with trusted fitness guidance before giving recommendations.
+- The demo can show `fitness_knowledge` rows and matching global `memory_embeddings` rows.
+- Running `python scripts/run_module.py --module 11` seeds both general fitness
+  and sport-specific knowledge plus their embeddings. Future custom knowledge packs
+  can be supplied with repeatable `--knowledge-file <path>` arguments; supplying
+  this option replaces the two default files for that run.
 
 ## 14. Module 12: CockroachDB Managed MCP Demo
 
@@ -664,7 +798,6 @@ Demo actions:
 - Run read-only queries against users, check-ins, plans, and decisions.
 - Use MCP to verify stored agent memory after a conversation.
 - Show how one `agent_decisions` row links back to the `daily_checkins` row and active plan that caused it.
-
 Example demo query:
 
 ```sql

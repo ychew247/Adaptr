@@ -46,6 +46,7 @@ class PlanRepairService:
         checkin_repository: Any,
         plan_repository: Any,
         decision_repository: Any,
+        decision_log: Any | None = None,
         memory_repository: Any,
         embedder: Any,
         repair_generator: Any,
@@ -55,6 +56,7 @@ class PlanRepairService:
         self.checkin_repository = checkin_repository
         self.plan_repository = plan_repository
         self.decision_repository = decision_repository
+        self.decision_log = decision_log
         self.memory_repository = memory_repository
         self.embedder = embedder
         self.repair_generator = repair_generator
@@ -90,9 +92,7 @@ class PlanRepairService:
         retrieval_embedding = self.embedder.embed(
             _repair_retrieval_query(active_plan, trigger_text, latest_checkin, readiness)
         )
-        retrieved_memories = self.memory_repository.search_similar(
-            user["id"], retrieval_embedding, limit=5, source_type="plan_repair"
-        )
+        retrieved_memories = self._retrieve_repair_context(user["id"], retrieval_embedding)
         retrieved_memory_ids = [memory["id"] for memory in retrieved_memories]
         past_plans = self.plan_repository.find_recent_by_user_id(user["id"], limit=4)
         validator_feedback: dict[str, Any] | None = None
@@ -156,6 +156,7 @@ class PlanRepairService:
             repair_action,
             retrieved_memory_ids,
             last_validation or {},
+            readiness,
         )
         say("Repair could not pass validation, so the prior validated plan remains active.")
         return "repair_fallback"
@@ -193,30 +194,31 @@ class PlanRepairService:
                 "generation_attempt": attempt,
             }
         )
-        decision = self.decision_repository.create_repair_decision(
-            {
-                "user_id": user["id"],
-                "checkin_id": latest_checkin.get("id"),
-                "plan_id": active_plan["id"],
-                "trigger_date": trigger_date,
-                "decision_type": "plan_repair",
-                "reason": candidate_plan["decision_reason"],
-                "data_used": {
-                    "trigger_text": trigger_text,
-                    "repair_action": repair_action,
-                    "readiness": candidate_plan["readiness"],
-                },
-                "plan_change": {
-                    "repaired_plan_id": saved_plan["id"],
-                    "action": repair_action["action"],
-                    "sessions": candidate_plan["sessions"],
-                },
-                "safety_flags": ["pain_gate"] if repair_action["pain_gate"] else [],
-                "validation_status": "validated",
-                "validation_notes": validation,
-                "retrieved_memory_ids": candidate_plan["retrieved_memory_ids"],
-                "generation_attempt": attempt,
-            }
+        decision_payload = {
+            "user_id": user["id"],
+            "checkin_id": latest_checkin.get("id"),
+            "plan_id": active_plan["id"],
+            "trigger_date": trigger_date,
+            "decision_type": "plan_repair",
+            "reason": candidate_plan["decision_reason"],
+            "data_used": {
+                "trigger_text": trigger_text,
+                "repair_action": repair_action,
+                "readiness": candidate_plan["readiness"],
+            },
+            "plan_change": {
+                "repaired_plan_id": saved_plan["id"],
+                "action": repair_action["action"],
+                "sessions": candidate_plan["sessions"],
+            },
+            "safety_flags": ["pain_gate"] if repair_action["pain_gate"] else [],
+            "validation_status": "validated",
+            "validation_notes": validation,
+            "retrieved_memory_ids": candidate_plan["retrieved_memory_ids"],
+            "generation_attempt": attempt,
+        }
+        decision = self._log_repair_decision(
+            decision_payload, latest_checkin, candidate_plan["readiness"]
         )
         self._store_repair_memory(user["id"], decision, candidate_plan)
         say(f"Saved {user['display_name']}'s validated plan repair.")
@@ -232,23 +234,54 @@ class PlanRepairService:
         repair_action: Mapping[str, Any],
         retrieved_memory_ids: list[Any],
         validation: Mapping[str, Any],
+        readiness: Mapping[str, Any],
     ) -> None:
-        self.decision_repository.create_repair_decision(
-            {
-                "user_id": user["id"],
-                "checkin_id": latest_checkin.get("id"),
-                "plan_id": active_plan["id"],
-                "trigger_date": trigger_date,
-                "decision_type": "plan_repair",
-                "reason": "Repair validation failed twice; retained the prior validated plan.",
-                "data_used": {"trigger_text": trigger_text, "repair_action": repair_action},
-                "plan_change": {"action": "keep_prior_valid_plan", "prior_plan_id": active_plan["id"]},
-                "safety_flags": ["pain_gate"] if repair_action["pain_gate"] else [],
-                "validation_status": "fallback_to_prior_plan",
-                "validation_notes": validation,
-                "retrieved_memory_ids": retrieved_memory_ids,
-                "generation_attempt": MAX_REPAIR_ATTEMPTS,
-            }
+        payload = {
+            "user_id": user["id"],
+            "checkin_id": latest_checkin.get("id"),
+            "plan_id": active_plan["id"],
+            "trigger_date": trigger_date,
+            "decision_type": "plan_repair",
+            "reason": "Repair validation failed twice; retained the prior validated plan.",
+            "data_used": {"trigger_text": trigger_text, "repair_action": repair_action},
+            "plan_change": {"action": "keep_prior_valid_plan", "prior_plan_id": active_plan["id"]},
+            "safety_flags": ["pain_gate"] if repair_action["pain_gate"] else [],
+            "validation_status": "fallback_to_prior_plan",
+            "validation_notes": validation,
+            "retrieved_memory_ids": retrieved_memory_ids,
+            "generation_attempt": MAX_REPAIR_ATTEMPTS,
+        }
+        self._log_repair_decision(payload, latest_checkin, readiness)
+
+    def _log_repair_decision(
+        self,
+        payload: Mapping[str, Any],
+        latest_checkin: Mapping[str, Any],
+        readiness: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if self.decision_log is None:
+            return self.decision_repository.create_repair_decision(dict(payload))
+
+        parent_decision_id = None
+        if latest_checkin.get("id"):
+            parent_decision = self.decision_log.log_readiness_assessment(
+                user_id=payload["user_id"], checkin=latest_checkin, readiness=readiness
+            )
+            parent_decision_id = parent_decision.get("id")
+        return self.decision_log.log_plan_repair(
+            user_id=payload["user_id"],
+            original_plan_id=payload["plan_id"],
+            trigger_date=payload["trigger_date"],
+            checkin=latest_checkin,
+            reason=payload["reason"],
+            data_used=payload["data_used"],
+            plan_change=payload["plan_change"],
+            safety_flags=payload["safety_flags"],
+            validation_status=payload["validation_status"],
+            validation_notes=payload["validation_notes"],
+            retrieved_memory_ids=payload["retrieved_memory_ids"],
+            generation_attempt=payload["generation_attempt"],
+            parent_decision_id=parent_decision_id,
         )
 
     def _store_repair_memory(
@@ -269,7 +302,7 @@ class PlanRepairService:
         try:
             self.memory_repository.upsert_memory(
                 user_id=user_id,
-                source_type="plan_repair",
+                source_type="agent_decision",
                 source_id=decision_id,
                 memory_text=memory_text,
                 embedding=self.embedder.embed(memory_text),
@@ -277,6 +310,22 @@ class PlanRepairService:
             )
         except Exception as error:
             LOGGER.warning("Could not store validated repair memory: %s", error)
+
+    def _retrieve_repair_context(
+        self, user_id: str, retrieval_embedding: Sequence[float]
+    ) -> list[Mapping[str, Any]]:
+        memories: list[Mapping[str, Any]] = []
+        seen_ids = set()
+        for source_type in ("agent_decision", "fitness_knowledge"):
+            for memory in self.memory_repository.search_similar(
+                user_id, retrieval_embedding, limit=5, source_type=source_type
+            ):
+                memory_id = memory.get("id")
+                if memory_id in seen_ids:
+                    continue
+                seen_ids.add(memory_id)
+                memories.append(memory)
+        return memories
 
 
 def determine_repair_action(

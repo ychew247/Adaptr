@@ -21,11 +21,17 @@ def main():
         ) from error
 
     migrations = [
-        Path("sql/001_create_users.sql").read_text(encoding="utf-8"),
-        Path("sql/002_create_user_profiles.sql").read_text(encoding="utf-8"),
-        Path("sql/003_create_goals.sql").read_text(encoding="utf-8"),
-        Path("sql/004_create_daily_checkins.sql").read_text(encoding="utf-8"),
-        Path("sql/005_create_workout_plans.sql").read_text(encoding="utf-8"),
+        Path(path).read_text(encoding="utf-8")
+        for path in [
+            "sql/001_create_users.sql",
+            "sql/002_create_user_profiles.sql",
+            "sql/003_create_goals.sql",
+            "sql/004_create_daily_checkins.sql",
+            "sql/005_create_workout_plans.sql",
+            "sql/006_upgrade_module6_hybrid.sql",
+            "sql/007_create_agent_decisions.sql",
+            "sql/010_upgrade_agent_decisions_module9.sql",
+        ]
     ]
 
     with psycopg2.connect(database_url) as connection:
@@ -34,7 +40,7 @@ def main():
                 cursor.execute(migration)
         connection.commit()
 
-        users, profiles, goals, checkins, plans = fetch_memory_tables(connection)
+        users, profiles, goals, checkins, plans, decisions = fetch_memory_tables(connection)
 
     print(
         format_table_rows(
@@ -108,6 +114,22 @@ def main():
                 "status",
             ],
             rows=plans,
+        )
+    )
+    print()
+    print(
+        format_table_rows(
+            title="agent_decisions",
+            columns=[
+                "display_name",
+                "decision_type",
+                "reason",
+                "trigger_date",
+                "validation_status",
+                "parent_decision_id",
+                "created_at",
+            ],
+            rows=decisions,
         )
     )
 

@@ -64,7 +64,14 @@ def test_create_repair_decision_persists_the_module6_audit_fields():
     assert "validation_status" in query
     assert "retrieved_memory_ids" in query
     assert "generation_attempt" in query
-    assert params[-4:] == ("validated", '{"hard_validation": {"valid": true}}', ["memory-1"], 2)
+    assert params[5] == "repair:plan-1:2026-08-04"
+    assert params[-5:] == (
+        "validated",
+        '{"hard_validation": {"valid": true}}',
+        ["memory-1"],
+        2,
+        None,
+    )
     assert saved["trigger_date"] == "2026-08-04"
     assert saved["validation_status"] == "validated"
 

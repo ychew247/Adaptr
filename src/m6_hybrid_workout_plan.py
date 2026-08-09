@@ -52,6 +52,7 @@ class HybridWorkoutPlanService:
         memory_repository: Any,
         embedder: Any,
         plan_generator: Any,
+        decision_log: Any | None = None,
     ) -> None:
         self.profile_repository = profile_repository
         self.goal_repository = goal_repository
@@ -60,6 +61,7 @@ class HybridWorkoutPlanService:
         self.memory_repository = memory_repository
         self.embedder = embedder
         self.plan_generator = plan_generator
+        self.decision_log = decision_log
 
     def run_plan_generation(self, user: Mapping[str, Any], say=print) -> str:
         profile = self.profile_repository.find_by_user_id(user["id"])
@@ -134,6 +136,21 @@ class HybridWorkoutPlanService:
                     }
                 )
                 self._store_plan_memory(user["id"], saved_plan, plan_json)
+                if self.decision_log is not None and latest_checkin.get("id"):
+                    readiness_decision = self.decision_log.log_readiness_assessment(
+                        user_id=user["id"], checkin=latest_checkin, readiness=readiness
+                    )
+                    self.decision_log.log_plan_generation(
+                        user_id=user["id"],
+                        plan=saved_plan,
+                        checkin=latest_checkin,
+                        readiness=readiness,
+                        reason=plan_json["decision_reason"],
+                        validation=validation,
+                        retrieved_memory_ids=retrieved_memory_ids,
+                        generation_attempt=attempt,
+                        parent_decision_id=readiness_decision.get("id"),
+                    )
                 say(f"Saved {user['display_name']}'s validated Week {plan_json['week_number']} workout plan.")
                 return "plan_ready"
 
@@ -167,7 +184,7 @@ class HybridWorkoutPlanService:
         try:
             self.memory_repository.upsert_memory(
                 user_id=user_id,
-                source_type="checkin",
+                source_type="daily_note",
                 source_id=checkin["id"],
                 memory_text=_checkin_memory_text(checkin, readiness),
                 embedding=embedding,
@@ -193,7 +210,7 @@ class HybridWorkoutPlanService:
             )
             self.memory_repository.upsert_memory(
                 user_id=user_id,
-                source_type="workout_plan",
+                source_type="validated_plan",
                 source_id=plan_id,
                 memory_text=memory_text,
                 embedding=self.embedder.embed(memory_text),

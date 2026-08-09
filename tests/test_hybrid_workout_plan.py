@@ -59,6 +59,9 @@ class PlanRepository:
 
 
 class MemoryRepository:
+    def __init__(self):
+        self.stored = []
+
     def search_similar(self, user_id, embedding, limit=5):
         return [
             {
@@ -72,12 +75,27 @@ class MemoryRepository:
         ]
 
     def upsert_memory(self, **kwargs):
+        self.stored.append(kwargs)
         return {"id": "stored-memory"}
 
 
 class Embedder:
     def embed(self, text):
         return [0.1, 0.2, 0.3]
+
+
+class DecisionLog:
+    def __init__(self):
+        self.readiness_calls = []
+        self.plan_calls = []
+
+    def log_readiness_assessment(self, **kwargs):
+        self.readiness_calls.append(kwargs)
+        return {"id": "readiness-decision-1"}
+
+    def log_plan_generation(self, **kwargs):
+        self.plan_calls.append(kwargs)
+        return {"id": "plan-decision-1"}
 
 
 class RetryingGenerator:
@@ -132,6 +150,8 @@ def test_hybrid_service_retries_with_validation_feedback_and_stores_audit_data()
     assert plans.saved[0]["retrieved_memory_ids"] == ["memory-1"]
     assert plans.saved[0]["generation_attempt"] == 2
     assert plans.saved[0]["source_checkin_id"] == "checkin-1"
+    assert service.memory_repository.stored[0]["source_type"] == "daily_note"
+    assert service.memory_repository.stored[1]["source_type"] == "validated_plan"
 
 
 def test_hybrid_service_never_saves_when_all_attempts_fail_validation():
@@ -196,3 +216,22 @@ def test_hybrid_service_retries_when_the_model_returns_malformed_json():
     assert service.run_plan_generation({"id": "user-1", "display_name": "Alex"}) == "plan_ready"
     assert generator.calls[1]["error_codes"] == ["invalid_model_json"]
     assert plans.saved[0]["generation_attempt"] == 2
+
+
+def test_hybrid_service_logs_validated_plan_with_its_readiness_parent():
+    decisions = DecisionLog()
+    service = HybridWorkoutPlanService(
+        profile_repository=FixedRepository(PROFILE),
+        goal_repository=FixedRepository(GOAL),
+        checkin_repository=CheckinRepository(),
+        plan_repository=PlanRepository(),
+        memory_repository=MemoryRepository(),
+        embedder=Embedder(),
+        plan_generator=RetryingGenerator(),
+        decision_log=decisions,
+    )
+
+    assert service.run_plan_generation({"id": "user-1", "display_name": "Alex"}) == "plan_ready"
+    assert decisions.readiness_calls[0]["checkin"]["id"] == "checkin-1"
+    assert decisions.plan_calls[0]["plan"]["id"] == "plan-1"
+    assert decisions.plan_calls[0]["parent_decision_id"] == "readiness-decision-1"

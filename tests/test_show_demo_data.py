@@ -33,6 +33,17 @@ class FakeCursor:
                     "active",
                 )
             ],
+            [
+                (
+                    "Alex",
+                    "plan_generation",
+                    "Plan was constrained by readiness.",
+                    "2026-08-03",
+                    "validated",
+                    "readiness-decision-1",
+                    "2026-08-03T00:00:00Z",
+                )
+            ],
         ]
 
     def __enter__(self):
@@ -89,10 +100,10 @@ def test_format_table_rows_handles_empty_rows():
     )
 
 
-def test_fetch_memory_tables_returns_users_profiles_goals_and_checkins():
+def test_fetch_memory_tables_returns_users_profiles_goals_checkins_plans_and_decisions():
     connection = FakeConnection()
 
-    users, profiles, goals, checkins, plans = fetch_memory_tables(connection)
+    users, profiles, goals, checkins, plans, decisions = fetch_memory_tables(connection)
 
     assert users == [("user-1", "Alex", "alex", "2026-08-01")]
     assert profiles == [("Alex", 25, 175, 72, "intermediate", ["full gym"], "4 days", "lightly active")]
@@ -122,4 +133,15 @@ def test_fetch_memory_tables_returns_users_profiles_goals_and_checkins():
             "active",
         )
     ]
-    assert len(connection.cursor_instance.queries) == 5
+    assert decisions == [
+        (
+            "Alex",
+            "plan_generation",
+            "Plan was constrained by readiness.",
+            "2026-08-03",
+            "validated",
+            "readiness-decision-1",
+            "2026-08-03T00:00:00Z",
+        )
+    ]
+    assert len(connection.cursor_instance.queries) == 6

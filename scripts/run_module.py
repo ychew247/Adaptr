@@ -29,10 +29,13 @@ from src.m6_hybrid_workout_plan import (
 from src.m6_vector_preflight import verify_embedding_dimension
 from src.ollama_workout_plan_generator import OllamaWorkoutPlanGenerator
 from src.cockroach_memory_embedding_repository import CockroachMemoryEmbeddingRepository
+from src.cockroach_fitness_knowledge_repository import CockroachFitnessKnowledgeRepository
 from src.m7_plan_repair import PlanRepairService
 from src.ollama_plan_repair_generator import OllamaPlanRepairGenerator
 from src.ollama_nutrition_note_generator import OllamaNutritionNoteGenerator
 from src.m8_nutrition_service import NutritionTargetService
+from src.m9_decision_log import DecisionLogService
+from src.m11_fitness_knowledge import parse_fitness_knowledge_files, seed_fitness_knowledge
 
 
 MIGRATIONS = [
@@ -45,6 +48,13 @@ MIGRATIONS = [
     "sql/007_create_agent_decisions.sql",
     "sql/008_create_nutrition_targets.sql",
     "sql/009_upgrade_profiles_for_nutrition.sql",
+    "sql/010_upgrade_agent_decisions_module9.sql",
+    "sql/011_create_fitness_knowledge.sql",
+]
+
+DEFAULT_KNOWLEDGE_FILES = [
+    "docs/fitness-knowledge-snippets.md",
+    "docs/sport-specific-knowledge-snippets.md",
 ]
 
 
@@ -52,7 +62,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run one fitness-agent module without replaying the full demo flow."
     )
-    parser.add_argument("--module", choices=["2", "3", "4", "5", "6", "7", "8"], required=True)
+    parser.add_argument("--module", choices=["2", "3", "4", "5", "6", "7", "8", "11"], required=True)
     parser.add_argument("--user", default="Alex")
     parser.add_argument("--deterministic-plan", action="store_true")
     parser.add_argument(
@@ -75,6 +85,15 @@ def main():
         "--seed-demo-profile",
         action="store_true",
         help="Create/update demo user Alex through Module 2 before running the selected module.",
+    )
+    parser.add_argument(
+        "--knowledge-file",
+        action="append",
+        dest="knowledge_files",
+        help=(
+            "Markdown file containing Module 11 knowledge snippets. "
+            "Repeat to seed multiple custom files; overrides the two default files."
+        ),
     )
     parser.add_argument("--skip-live", action="store_true")
     args = parser.parse_args()
@@ -103,6 +122,28 @@ def main():
         checkin_repository = CockroachCheckinRepository(connection)
         plan_repository = CockroachWorkoutPlanRepository(connection)
         nutrition_repository = CockroachNutritionTargetRepository(connection)
+        decision_log = DecisionLogService(CockroachAgentDecisionRepository(connection))
+
+        if args.module == "11":
+            ollama_client = OllamaClient()
+            memory_repository = CockroachMemoryEmbeddingRepository(connection)
+            verify_embedding_dimension(ollama_client, memory_repository)
+            knowledge_files = args.knowledge_files or DEFAULT_KNOWLEDGE_FILES
+            snippets = parse_fitness_knowledge_files(
+                Path(path) for path in knowledge_files
+            )
+            result = seed_fitness_knowledge(
+                snippets,
+                CockroachFitnessKnowledgeRepository(connection),
+                memory_repository,
+                ollama_client,
+            )
+            print(
+                "Seeded {snippets} fitness knowledge snippets and {memories} vector memories.".format(
+                    **result
+                )
+            )
+            return
 
         if args.seed_demo_profile:
             user = seed_demo_user(user_repository, profile_repository)["user"]
@@ -142,6 +183,9 @@ def main():
 
         if args.module == "5":
             result = compute_readiness(list(reversed(checkins[1:])), checkins[0])
+            decision_log.log_readiness_assessment(
+                user_id=user["id"], checkin=checkins[0], readiness=result
+            )
             print(f"Readiness score for {user['display_name']}: {result['readiness_score']}")
             print(f"Band: {result['band']}")
             print(f"Safety triggered: {result['safety_triggered']}")
@@ -156,6 +200,7 @@ def main():
                 plan_repository=plan_repository,
                 nutrition_repository=nutrition_repository,
                 note_generator=OllamaNutritionNoteGenerator(OllamaClient()),
+                decision_log=decision_log,
             ).run_daily_target(
                 user,
                 workout_today=args.workout_today,
@@ -181,6 +226,7 @@ def main():
                 checkin_repository=checkin_repository,
                 plan_repository=plan_repository,
                 decision_repository=CockroachAgentDecisionRepository(connection),
+                decision_log=decision_log,
                 memory_repository=memory_repository,
                 embedder=ollama_client,
                 repair_generator=OllamaPlanRepairGenerator(ollama_client),
@@ -198,6 +244,7 @@ def main():
                 if args.deterministic_plan
                 else OllamaWorkoutPlanGenerator(ollama_client)
             ),
+            decision_log=decision_log,
         ).run_plan_generation(user)
 
 

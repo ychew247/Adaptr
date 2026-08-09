@@ -1,3 +1,5 @@
+import pytest
+
 from src.cockroach_memory_embedding_repository import CockroachMemoryEmbeddingRepository
 
 
@@ -46,13 +48,13 @@ def test_ensure_schema_creates_memory_embeddings_when_table_is_missing():
     assert connection.commits == 1
 
 
-def test_search_similar_uses_a_user_scoped_cosine_vector_query():
+def test_search_similar_uses_recent_personal_and_global_cosine_vector_query():
     connection = FakeConnection(
         [
             [
                 (
                     "memory-1",
-                    "checkin",
+                    "daily_note",
                     "checkin-1",
                     "Soreness improved after mobility.",
                     {"worked": "mobility"},
@@ -68,8 +70,14 @@ def test_search_similar_uses_a_user_scoped_cosine_vector_query():
 
     query, params = connection.cursor_instance.queries[0]
     assert "embedding <=>" in query
-    assert "WHERE user_id = %s" in query
-    assert params == ("[0.1,0.2,0.3]", "user-1", "[0.1,0.2,0.3]", 3)
+    assert "created_at >= %s" in query
+    assert "user_id IS NULL" in query
+    assert "embedding <=> %s::VECTOR < %s" in query
+    assert "created_at DESC" in query
+    assert params[0] == "[0.1,0.2,0.3]"
+    assert params[1] == "user-1"
+    assert params[4] == 0.40
+    assert params[-1] == 3
     assert memories[0]["id"] == "memory-1"
     assert memories[0]["distance"] == 0.15
 
@@ -79,7 +87,7 @@ def test_upsert_memory_does_not_label_a_timestamp_as_similarity_distance():
         [
             (
                 "memory-1",
-                "checkin",
+                "daily_note",
                 "checkin-1",
                 "Soreness improved after mobility.",
                 {"worked": "mobility"},
@@ -91,7 +99,7 @@ def test_upsert_memory_does_not_label_a_timestamp_as_similarity_distance():
 
     memory = CockroachMemoryEmbeddingRepository(connection).upsert_memory(
         user_id="user-1",
-        source_type="checkin",
+        source_type="daily_note",
         source_id="checkin-1",
         memory_text="Soreness improved after mobility.",
         embedding=[0.1, 0.2, 0.3],
@@ -101,13 +109,78 @@ def test_upsert_memory_does_not_label_a_timestamp_as_similarity_distance():
     assert memory["distance"] is None
 
 
-def test_search_similar_can_limit_retrieval_to_prior_repair_memories():
+def test_search_similar_can_limit_retrieval_to_prior_agent_decisions():
     connection = FakeConnection([[]])
 
     CockroachMemoryEmbeddingRepository(connection).search_similar(
-        "user-1", [0.1, 0.2, 0.3], source_type="plan_repair"
+        "user-1", [0.1, 0.2, 0.3], source_type="agent_decision"
     )
 
     query, params = connection.cursor_instance.queries[0]
     assert "source_type = %s" in query
-    assert params[2] == "plan_repair"
+    assert "agent_decision" in params
+
+
+def test_upsert_memory_rejects_unknown_source_type_before_executing_sql():
+    connection = FakeConnection([])
+    repository = CockroachMemoryEmbeddingRepository(connection)
+
+    with pytest.raises(ValueError, match="Unsupported memory source type"):
+        repository.upsert_memory(
+            user_id="user-1",
+            source_type="check_in",
+            source_id="checkin-1",
+            memory_text="Soreness improved after mobility.",
+            embedding=[0.1, 0.2, 0.3],
+            outcome_json={},
+        )
+
+    assert connection.cursor_instance.queries == []
+
+
+def test_global_fitness_knowledge_can_be_written_without_a_user_id():
+    connection = FakeConnection(
+        [
+            (
+                "memory-1", "fitness_knowledge", "knowledge-1", "Progress slowly.", {},
+                "2026-08-03T00:00:00Z", "2026-08-03T00:00:00Z",
+            )
+        ]
+    )
+
+    memory = CockroachMemoryEmbeddingRepository(connection).upsert_memory(
+        user_id=None,
+        source_type="fitness_knowledge",
+        source_id="knowledge-1",
+        memory_text="Progress slowly.",
+        embedding=[0.1, 0.2, 0.3],
+        outcome_json={},
+    )
+
+    assert memory["source_type"] == "fitness_knowledge"
+
+
+def test_global_fitness_knowledge_refreshes_existing_null_user_memory():
+    connection = FakeConnection(
+        [
+            (
+                "memory-1", "fitness_knowledge", "knowledge-1", "Updated guidance.", {},
+                "2026-08-03T00:00:00Z", "2026-08-04T00:00:00Z",
+            )
+        ]
+    )
+
+    memory = CockroachMemoryEmbeddingRepository(connection).upsert_memory(
+        user_id=None,
+        source_type="fitness_knowledge",
+        source_id="knowledge-1",
+        memory_text="Updated guidance.",
+        embedding=[0.1, 0.2, 0.3],
+        outcome_json={},
+    )
+
+    query, params = connection.cursor_instance.queries[0]
+    assert "UPDATE memory_embeddings" in query
+    assert "user_id IS NULL" in query
+    assert params[3] == "fitness_knowledge"
+    assert memory["id"] == "memory-1"

@@ -99,11 +99,28 @@ def fetch_memory_tables(connection):
         )
         plans = cursor.fetchall()
 
-    return users, profiles, goals, checkins, plans
+        cursor.execute(
+            """
+            SELECT
+              u.display_name,
+              d.decision_type,
+              d.reason,
+              d.trigger_date,
+              d.validation_status,
+              d.parent_decision_id,
+              d.created_at
+            FROM agent_decisions AS d
+            JOIN users AS u ON u.id = d.user_id
+            ORDER BY d.created_at DESC
+            """
+        )
+        decisions = cursor.fetchall()
+
+    return users, profiles, goals, checkins, plans, decisions
 
 
 def fetch_users_and_profiles(connection):
-    users, profiles, _goals, _checkins, _plans = fetch_memory_tables(connection)
+    users, profiles, _goals, _checkins, _plans, _decisions = fetch_memory_tables(connection)
     return users, profiles
 
 

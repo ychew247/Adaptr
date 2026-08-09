@@ -59,6 +59,7 @@ def test_high_intensity_workout_adds_calories_and_hydration():
     assert result["calories_min"] == base["calories_min"] + 100
     assert result["calories_max"] == base["calories_max"] + 150
     assert result["hydration_l"] == round(base["hydration_l"] + 0.9, 2)
+    assert result["workout_today"] is True
 
 
 def test_recovery_does_not_cut_calories():

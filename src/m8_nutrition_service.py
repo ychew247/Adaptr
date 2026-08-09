@@ -15,6 +15,7 @@ class NutritionTargetService:
         plan_repository,
         nutrition_repository,
         note_generator=None,
+        decision_log=None,
     ):
         self.profile_repository = profile_repository
         self.goal_repository = goal_repository
@@ -22,6 +23,7 @@ class NutritionTargetService:
         self.plan_repository = plan_repository
         self.nutrition_repository = nutrition_repository
         self.note_generator = note_generator
+        self.decision_log = decision_log
 
     def run_daily_target(
         self,
@@ -40,9 +42,11 @@ class NutritionTargetService:
         goal = self.goal_repository.find_active_by_user_id(user["id"])
         active_plan = self.plan_repository.find_active_by_user_id(user["id"])
         checkins = self.checkin_repository.find_recent_by_user_id(user["id"], limit=30)
+        readiness = None
         readiness_band = None
         if checkins:
-            readiness_band = compute_readiness(list(reversed(checkins[1:])), checkins[0])["band"]
+            readiness = compute_readiness(list(reversed(checkins[1:])), checkins[0])
+            readiness_band = readiness["band"]
 
         targets = calculate_nutrition_targets(
             profile=profile,
@@ -53,7 +57,7 @@ class NutritionTargetService:
         )
         validate_nutrition_targets(targets)
         notes = self._generate_notes(targets, profile, workout_today)
-        return self.nutrition_repository.upsert_daily_target(
+        saved_target = self.nutrition_repository.upsert_daily_target(
             {
                 "user_id": user["id"],
                 "calories_min": targets["calories_min"],
@@ -64,6 +68,21 @@ class NutritionTargetService:
                 "notes": notes,
             }
         )
+        if self.decision_log is not None:
+            parent_decision_id = None
+            if readiness is not None:
+                readiness_decision = self.decision_log.log_readiness_assessment(
+                    user_id=user["id"], checkin=checkins[0], readiness=readiness
+                )
+                parent_decision_id = readiness_decision.get("id")
+            self.decision_log.log_nutrition_target(
+                user_id=user["id"],
+                nutrition_target=saved_target,
+                targets=targets,
+                readiness_band=readiness_band,
+                parent_decision_id=parent_decision_id,
+            )
+        return saved_target
 
     def _generate_notes(self, targets, profile, workout_today):
         if self.note_generator is None:

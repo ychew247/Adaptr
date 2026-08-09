@@ -1,6 +1,15 @@
 import subprocess
 import sys
 
+from scripts.run_module import DEFAULT_KNOWLEDGE_FILES
+
+
+def test_module11_defaults_include_general_and_sport_knowledge_files():
+    assert DEFAULT_KNOWLEDGE_FILES == [
+        "docs/fitness-knowledge-snippets.md",
+        "docs/sport-specific-knowledge-snippets.md",
+    ]
+
 
 def test_run_module_script_imports_project_modules_when_run_by_path():
     result = subprocess.run(
@@ -16,6 +25,17 @@ def test_run_module_script_imports_project_modules_when_run_by_path():
 def test_run_module_script_accepts_module7_without_running_live_dependencies():
     result = subprocess.run(
         [sys.executable, "scripts/run_module.py", "--module", "7", "--skip-live"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "Direct module runner imports successfully." in result.stdout
+
+
+def test_run_module_script_accepts_module11_without_running_live_dependencies():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_module.py", "--module", "11", "--skip-live"],
         capture_output=True,
         text=True,
     )

@@ -103,6 +103,16 @@ class MemoryRepository:
 
     def search_similar(self, user_id, embedding, limit=5, source_type=None):
         self.searches.append({"user_id": user_id, "source_type": source_type})
+        if source_type == "fitness_knowledge":
+            return [
+                {
+                    "id": "knowledge-memory-1",
+                    "source_type": "fitness_knowledge",
+                    "memory_text": "For wrist discomfort, avoid painful loading and preserve the pull pattern when possible.",
+                    "outcome_json": {"topic": "substitution_general_rules"},
+                    "distance": 0.2,
+                }
+            ]
         return [
             {
                 "id": "repair-memory-1",
@@ -121,6 +131,20 @@ class MemoryRepository:
 class Embedder:
     def embed(self, text):
         return [0.1, 0.2, 0.3]
+
+
+class DecisionLog:
+    def __init__(self):
+        self.readiness_calls = []
+        self.repair_calls = []
+
+    def log_readiness_assessment(self, **kwargs):
+        self.readiness_calls.append(kwargs)
+        return {"id": "readiness-decision-1"}
+
+    def log_plan_repair(self, **kwargs):
+        self.repair_calls.append(kwargs)
+        return {"id": "repair-decision-1"}
 
 
 class RetryingRepairGenerator:
@@ -148,13 +172,14 @@ class RetryingRepairGenerator:
         }
 
 
-def _service(generator, decision_repository=None):
+def _service(generator, decision_repository=None, decision_log=None):
     return PlanRepairService(
         profile_repository=ProfileRepository(),
         goal_repository=GoalRepository(),
         checkin_repository=CheckinRepository(),
         plan_repository=PlanRepository(),
         decision_repository=decision_repository or DecisionRepository(),
+        decision_log=decision_log,
         memory_repository=MemoryRepository(),
         embedder=Embedder(),
         repair_generator=generator,
@@ -172,16 +197,21 @@ def test_repair_retrieves_precedents_retries_invalid_edit_and_stores_validated_v
     )
 
     assert result == "repair_applied"
-    assert service.memory_repository.searches[0]["source_type"] == "plan_repair"
+    assert service.memory_repository.searches[0]["source_type"] == "agent_decision"
+    assert service.memory_repository.searches[1]["source_type"] == "fitness_knowledge"
     assert generator.calls[0]["memories"][0]["id"] == "repair-memory-1"
+    assert generator.calls[0]["memories"][1]["id"] == "knowledge-memory-1"
     assert "injury_exclusion_violation" in generator.calls[1]["feedback"]["error_codes"]
     assert len(service.plan_repository.created) == 1
     assert service.plan_repository.created[0]["validation_status"] == "validated"
-    assert service.plan_repository.created[0]["retrieved_memory_ids"] == ["repair-memory-1"]
+    assert service.plan_repository.created[0]["retrieved_memory_ids"] == [
+        "repair-memory-1",
+        "knowledge-memory-1",
+    ]
     assert service.plan_repository.created[0]["generation_attempt"] == 2
     assert service.decision_repository.created[0]["plan_id"] == "prior-plan-1"
     assert service.decision_repository.created[0]["validation_status"] == "validated"
-    assert service.memory_repository.stored[0]["source_type"] == "plan_repair"
+    assert service.memory_repository.stored[0]["source_type"] == "agent_decision"
 
 
 def test_repair_falls_back_to_prior_valid_plan_after_two_invalid_attempts():
@@ -243,3 +273,17 @@ def test_pain_gate_keeps_deterministic_recovery_exercises_despite_model_suggesti
         "pain-free range of motion",
     ]
     assert candidate["intensity_band"] == "recovery"
+
+
+def test_repair_logs_the_decision_with_its_readiness_parent():
+    decisions = DecisionLog()
+    service = _service(RetryingRepairGenerator(), decision_log=decisions)
+
+    assert service.run_repair(
+        {"id": "user-1", "display_name": "Alex"},
+        trigger_text="My wrist is sore.",
+        trigger_date="2026-08-04",
+    ) == "repair_applied"
+
+    assert decisions.readiness_calls[0]["checkin"]["id"] == "checkin-1"
+    assert decisions.repair_calls[0]["parent_decision_id"] == "readiness-decision-1"

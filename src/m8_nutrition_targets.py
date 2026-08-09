@@ -74,6 +74,7 @@ def calculate_nutrition_targets(
         "fiber_g": 30 if formula_profile == "male" else 25,
         "bmr_formula_profile": formula_profile,
         "readiness_band": readiness_band,
+        "workout_today": workout_today,
         "planned_intensity": planned_intensity or "not_planned",
     }
     validate_nutrition_targets(result)

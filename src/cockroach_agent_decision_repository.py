@@ -30,40 +30,95 @@ class CockroachAgentDecisionRepository:
             row = cursor.fetchone()
         return self._row_to_decision(row) if row else None
 
-    def create_repair_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
+    def find_by_idempotency_key(
+        self, user_id: str, decision_type: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  id, user_id, checkin_id, plan_id, trigger_date, decision_type, reason,
+                  data_used, plan_change, safety_flags, validation_status, validation_notes,
+                  retrieved_memory_ids, generation_attempt, created_at, idempotency_key,
+                  parent_decision_id
+                FROM agent_decisions
+                WHERE user_id = %s AND decision_type = %s AND idempotency_key = %s
+                LIMIT 1
+                """,
+                (user_id, decision_type, idempotency_key),
+            )
+            row = cursor.fetchone()
+        return self._row_to_decision(row) if row else None
+
+    def create_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
                 INSERT INTO agent_decisions (
-                  user_id, checkin_id, plan_id, trigger_date, decision_type, reason,
-                  data_used, plan_change, safety_flags, validation_status, validation_notes,
-                  retrieved_memory_ids, generation_attempt
+                  user_id, checkin_id, plan_id, trigger_date, decision_type, idempotency_key,
+                  reason, data_used, plan_change, safety_flags, validation_status,
+                  validation_notes, retrieved_memory_ids, generation_attempt, parent_decision_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING
                   id, user_id, checkin_id, plan_id, trigger_date, decision_type, reason,
                   data_used, plan_change, safety_flags, validation_status, validation_notes,
-                  retrieved_memory_ids, generation_attempt, created_at
+                  retrieved_memory_ids, generation_attempt, created_at, idempotency_key,
+                  parent_decision_id
                 """,
-                (
-                    decision["user_id"],
-                    decision.get("checkin_id"),
-                    decision["plan_id"],
-                    decision["trigger_date"],
-                    decision["decision_type"],
-                    decision["reason"],
-                    json.dumps(decision.get("data_used") or {}),
-                    json.dumps(decision.get("plan_change") or {}),
-                    decision.get("safety_flags") or [],
-                    decision["validation_status"],
-                    json.dumps(decision.get("validation_notes") or {}),
-                    decision.get("retrieved_memory_ids") or [],
-                    decision.get("generation_attempt", 1),
-                ),
+                self._insert_params(decision),
             )
             row = cursor.fetchone()
         self.connection.commit()
         return self._row_to_decision(row)
+
+    def create_repair_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
+        return self.create_decision(
+            {
+                **decision,
+                "idempotency_key": decision.get("idempotency_key")
+                or f"repair:{decision['plan_id']}:{decision['trigger_date']}",
+            }
+        )
+
+    def timeline_for_user(self, user_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                  id, user_id, checkin_id, plan_id, trigger_date, decision_type, reason,
+                  data_used, plan_change, safety_flags, validation_status, validation_notes,
+                  retrieved_memory_ids, generation_attempt, created_at, idempotency_key,
+                  parent_decision_id
+                FROM agent_decisions
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            rows = cursor.fetchall()
+        return [self._row_to_decision(row) for row in rows]
+
+    @staticmethod
+    def _insert_params(decision: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            decision["user_id"],
+            decision.get("checkin_id"),
+            decision.get("plan_id"),
+            decision["trigger_date"],
+            decision["decision_type"],
+            decision["idempotency_key"],
+            decision["reason"],
+            json.dumps(decision.get("data_used") or {}),
+            json.dumps(decision.get("plan_change") or {}),
+            decision.get("safety_flags") or [],
+            decision.get("validation_status", "pending"),
+            json.dumps(decision.get("validation_notes") or {}),
+            decision.get("retrieved_memory_ids") or [],
+            decision.get("generation_attempt", 1),
+            decision.get("parent_decision_id"),
+        )
 
     @staticmethod
     def _row_to_decision(row: Sequence[Any]) -> dict[str, Any]:
@@ -83,6 +138,8 @@ class CockroachAgentDecisionRepository:
             "retrieved_memory_ids": list(row[12] or []),
             "generation_attempt": row[13],
             "created_at": row[14],
+            "idempotency_key": row[15] if len(row) > 15 else None,
+            "parent_decision_id": row[16] if len(row) > 16 else None,
         }
 
 

@@ -1,3 +1,6 @@
+import json
+from decimal import Decimal
+
 from src.cockroach_agent_decision_repository import CockroachAgentDecisionRepository
 
 
@@ -89,3 +92,20 @@ def test_find_repair_by_trigger_uses_the_idempotency_key():
     assert "plan_id = %s" in query
     assert "trigger_date = %s" in query
     assert params == ("user-1", "plan-1", "2026-08-04")
+
+
+def test_insert_params_serializes_decimal_values_in_json_payloads():
+    params = CockroachAgentDecisionRepository._insert_params(
+        {
+            "user_id": "user-1",
+            "trigger_date": "2026-08-10",
+            "decision_type": "nutrition_target",
+            "idempotency_key": "nutrition:target-1",
+            "reason": "Nutrition targets calculated.",
+            "data_used": {"tdee": Decimal("2314.75")},
+            "plan_change": {"hydration_l": Decimal("2.64")},
+        }
+    )
+
+    assert json.loads(params[7]) == {"tdee": 2314.75}
+    assert json.loads(params[8]) == {"hydration_l": 2.64}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from typing import Any, Sequence
 
 
@@ -110,11 +111,11 @@ class CockroachAgentDecisionRepository:
             decision["decision_type"],
             decision["idempotency_key"],
             decision["reason"],
-            json.dumps(decision.get("data_used") or {}),
-            json.dumps(decision.get("plan_change") or {}),
+            json.dumps(decision.get("data_used") or {}, default=_json_default),
+            json.dumps(decision.get("plan_change") or {}, default=_json_default),
             decision.get("safety_flags") or [],
             decision.get("validation_status", "pending"),
-            json.dumps(decision.get("validation_notes") or {}),
+            json.dumps(decision.get("validation_notes") or {}, default=_json_default),
             decision.get("retrieved_memory_ids") or [],
             decision.get("generation_attempt", 1),
             decision.get("parent_decision_id"),
@@ -145,3 +146,9 @@ class CockroachAgentDecisionRepository:
 
 def _json_value(value: Any) -> dict[str, Any]:
     return json.loads(value) if isinstance(value, str) else (value or {})
+
+
+def _json_default(value: Any) -> float:
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")

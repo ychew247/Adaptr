@@ -87,3 +87,16 @@ def test_adaptive_checkin_service_saves_one_freeform_checkin():
     assert messages == [
         "Saved Alex's adaptive check-in. Next I can calculate readiness and adjust the plan."
     ]
+
+
+def test_adaptive_checkin_service_uses_explicit_iso_checkin_date():
+    repository = FakeCheckinRepository()
+    service = AdaptiveCheckinService(repository, FakeParser())
+
+    service.run_checkin(
+        user={"id": "user-1", "display_name": "Alex"},
+        ask=lambda _prompt: "Check-in date: 2026-08-12. Slept 7 hours and feel ready.",
+        say=lambda _message: None,
+    )
+
+    assert repository.saved_checkins[0]["checkin_date"] == "2026-08-12"

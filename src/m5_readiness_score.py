@@ -1,4 +1,5 @@
 import math
+import re
 import statistics
 
 
@@ -40,6 +41,8 @@ BANDS = [
     (40, "lighter_session"),
     (0, "recovery_day"),
 ]
+
+HARD_PAIN_TERMS = ("sharp", "worsening", "severe", "persistent")
 
 
 def compute_readiness(
@@ -83,7 +86,7 @@ def compute_readiness(
     interaction = interaction_gamma * penalties["sleep"] * penalties["soreness"]
     readiness = _clip(100 - deduction - interaction, 0, 100)
 
-    pain_gate_applied = _has_hard_pain_flag(today_checkin)
+    pain_gate_applied = has_hard_pain_flag(today_checkin.get("pain_notes") or "")
     if pain_gate_applied:
         readiness = min(readiness, 30)
 
@@ -138,9 +141,14 @@ def _sigmoid_penalty(z_score, sigmoid_k, sigmoid_z0):
     return 1 / (1 + math.exp(-sigmoid_k * (z_score - sigmoid_z0)))
 
 
-def _has_hard_pain_flag(checkin):
-    pain_text = (checkin.get("pain_notes") or "").lower()
-    return any(word in pain_text for word in ["sharp", "worsening", "severe", "persistent"])
+def has_hard_pain_flag(pain_text):
+    normalized = str(pain_text or "").lower()
+    for term in HARD_PAIN_TERMS:
+        for match in re.finditer(rf"\b{re.escape(term)}\b", normalized):
+            context = normalized[max(0, match.start() - 32) : match.start()]
+            if not re.search(r"\b(?:no|not|without)\s+(?:\w+\s+){0,2}$", context):
+                return True
+    return False
 
 
 def _band_for_score(score):

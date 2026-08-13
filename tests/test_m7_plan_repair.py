@@ -1,4 +1,9 @@
-from src.m7_plan_repair import PlanRepairService, apply_repair_action, determine_repair_action
+from src.m7_plan_repair import (
+    PlanRepairService,
+    _target_session_index,
+    apply_repair_action,
+    determine_repair_action,
+)
 
 
 PROFILE = {
@@ -272,6 +277,7 @@ def test_pain_gate_keeps_deterministic_recovery_exercises_despite_model_suggesti
         "easy walk",
         "pain-free range of motion",
     ]
+    assert len(candidate["sessions"]) == 1
     assert candidate["intensity_band"] == "recovery"
 
 
@@ -310,3 +316,42 @@ def test_repair_uses_shared_readiness_without_duplicate_log():
 
     assert decisions.readiness_calls == []
     assert decisions.repair_calls[0]["parent_decision_id"] == "flow-readiness-1"
+
+
+def test_date_aware_repair_targets_the_session_scheduled_for_today():
+    sessions = [
+        {"day": "Day 1", "scheduled_date": "2026-08-10", "status": "planned"},
+        {"day": "Day 2", "scheduled_date": "2026-08-13", "status": "planned"},
+        {"day": "Day 3", "scheduled_date": "2026-08-14", "status": "planned"},
+    ]
+
+    assert _target_session_index(sessions, "reschedule_session", "2026-08-13") == 1
+
+
+def test_limited_minutes_selects_a_matching_shortened_session():
+    readiness = {"readiness_score": 85, "band": "train_as_planned", "safety_triggered": False}
+    action = determine_repair_action(readiness, "I only have 15 minutes today.")
+
+    candidate = apply_repair_action(
+        ACTIVE_PLAN["plan_json"],
+        action,
+        {"replacement_session": {"exercises": ["dumbbell row"]}},
+        {"intensity_ceiling": "normal"},
+        readiness,
+        CHECKIN,
+        [],
+        1,
+    )
+
+    assert action["action"] == "shorten_session"
+    assert candidate["sessions"][0]["sets_reps"] == "15 minutes, easy-to-moderate"
+
+
+def test_negated_pain_does_not_select_a_recovery_repair():
+    action = determine_repair_action(
+        {"readiness_score": 65, "band": "reduce_volume", "safety_triggered": False},
+        "I missed yesterday, have a mild shoulder ache that is not sharp, and only have 20 minutes.",
+    )
+
+    assert action["pain_gate"] is False
+    assert action["action"] == "reschedule_session"

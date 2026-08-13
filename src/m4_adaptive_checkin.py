@@ -1,4 +1,6 @@
+from datetime import date
 import random
+import re
 
 
 GENERAL_CHECKIN_PROMPTS = [
@@ -43,6 +45,7 @@ class AdaptiveCheckinService:
 
         checkin = {
             "user_id": user["id"],
+            "checkin_date": _explicit_checkin_date(answer),
             "sleep_hours": parsed["sleep_hours"],
             "stress_level": parsed["stress_level"],
             "energy_level": parsed["energy_level"],
@@ -78,3 +81,17 @@ def _latest_body_issue(recent_checkins):
             return "high soreness"
 
     return None
+
+
+def _explicit_checkin_date(text):
+    match = re.search(
+        r"\bcheck(?:-|\s)?in\s+date\s*:\s*(\d{4}-\d{2}-\d{2})\b",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    try:
+        return date.fromisoformat(match.group(1)).isoformat()
+    except ValueError:
+        return None

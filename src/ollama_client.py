@@ -18,17 +18,20 @@ class OllamaClient:
         self.http = http
         self.timeout = timeout
 
-    def chat_json_instruction(self, instruction, user_text):
+    def chat_json_instruction(self, instruction, user_text, *, require_json=True):
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": instruction},
+                {"role": "user", "content": user_text},
+            ],
+            "stream": False,
+        }
+        if require_json:
+            payload["format"] = "json"
         response = self.http.post(
             f"{self.base_url}/api/chat",
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": instruction},
-                    {"role": "user", "content": user_text},
-                ],
-                "stream": False,
-            },
+            json=payload,
             timeout=self.timeout,
         )
         response.raise_for_status()

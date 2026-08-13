@@ -1,3 +1,5 @@
 psycopg2-binary>=2.9
 requests>=2.32
 openpyxl>=3.1
+streamlit>=1.38
+nicegui>=3.0

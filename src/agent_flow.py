@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Mapping, TypedDict
 
 from src.m5_readiness_score import compute_readiness
@@ -108,6 +109,7 @@ class AdaptiveFitnessAgent:
                 return self.repair_service.run_repair(
                     user,
                     trigger_text=self._repair_trigger(checkin, readiness),
+                    trigger_date=str(checkin.get("checkin_date")) if checkin.get("checkin_date") else None,
                     readiness=readiness,
                     latest_checkin=checkin,
                     parent_decision_id=parent_decision_id,
@@ -128,7 +130,9 @@ class AdaptiveFitnessAgent:
         if (checkin.get("workout_completed") or "").lower() in {"missed", "partial"}:
             return True
         note = (checkin.get("free_text_note") or "").lower()
-        return any(word in note for word in ("limited time", "short on time", "too busy"))
+        return any(word in note for word in ("limited time", "short on time", "too busy")) or bool(
+            re.search(r"\b(?:only have|have)\s+\d{1,3}\s*(?:minutes?|mins?)\b", note)
+        )
 
     @staticmethod
     def _repair_trigger(

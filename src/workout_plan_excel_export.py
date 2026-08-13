@@ -1,3 +1,4 @@
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +13,24 @@ HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 def export_sessions_workbook(plan: dict[str, Any], output_path: Path) -> Path:
     """Write a sessions-only workout-plan workbook and return its saved path."""
+    workbook = _build_sessions_workbook(plan)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+    return output_path
+
+
+def export_sessions_workbook_bytes(plan: dict[str, Any]) -> bytes:
+    """Return a sessions-only workbook for an in-browser download."""
+    output = BytesIO()
+    _build_sessions_workbook(plan).save(output)
+    return output.getvalue()
+
+
+def _build_sessions_workbook(plan: dict[str, Any]) -> Workbook:
     sessions = (plan.get("plan_json") or {}).get("sessions") or []
     if not sessions:
         raise ValueError("Workout plan has no sessions to export.")
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     workbook = Workbook()
     sheet = workbook.active
@@ -58,6 +71,4 @@ def export_sessions_workbook(plan: dict[str, Any], output_path: Path) -> Path:
         "E": 38,
     }.items():
         sheet.column_dimensions[column].width = width
-
-    workbook.save(output_path)
-    return output_path
+    return workbook

@@ -1,7 +1,9 @@
+from io import BytesIO
+
 from openpyxl import load_workbook
 import pytest
 
-from src.workout_plan_excel_export import export_sessions_workbook
+from src.workout_plan_excel_export import export_sessions_workbook, export_sessions_workbook_bytes
 
 
 VALIDATED_PLAN = {
@@ -61,3 +63,10 @@ def test_export_sessions_workbook_rejects_an_empty_session_list(tmp_path):
             tmp_path / "empty_plan.xlsx",
         )
 
+
+def test_export_sessions_workbook_bytes_is_a_downloadable_workbook():
+    workbook_bytes = export_sessions_workbook_bytes(VALIDATED_PLAN)
+
+    workbook = load_workbook(BytesIO(workbook_bytes))
+
+    assert workbook["Sessions"]["B2"].value == "Lower-body strength"

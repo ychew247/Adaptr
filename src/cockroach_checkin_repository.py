@@ -42,6 +42,7 @@ class CockroachCheckinRepository:
                 """
                 INSERT INTO daily_checkins (
                   user_id,
+                  checkin_date,
                   sleep_hours,
                   stress_level,
                   energy_level,
@@ -54,7 +55,7 @@ class CockroachCheckinRepository:
                   free_text_note,
                   checkin_details
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, COALESCE(%s, current_date), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, checkin_date) DO UPDATE SET
                   sleep_hours = EXCLUDED.sleep_hours,
                   stress_level = EXCLUDED.stress_level,
@@ -86,6 +87,7 @@ class CockroachCheckinRepository:
                 """,
                 (
                     checkin["user_id"],
+                    checkin.get("checkin_date"),
                     checkin["sleep_hours"],
                     checkin["stress_level"],
                     checkin["energy_level"],

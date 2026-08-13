@@ -77,3 +77,13 @@ def test_create_checkin_uses_user_date_upsert():
 
     assert "ON CONFLICT (user_id, checkin_date) DO UPDATE" in cursor.sql
     assert saved["id"] == "checkin-1"
+
+
+def test_create_checkin_persists_an_explicit_checkin_date():
+    cursor = RecordingCursor(return_row=CHECKIN_ROW)
+    repository = CockroachCheckinRepository(RecordingConnection(cursor))
+
+    repository.create_checkin({**CHECKIN_PAYLOAD, "checkin_date": "2026-08-12"})
+
+    assert "checkin_date," in cursor.sql
+    assert "2026-08-12" in cursor.params

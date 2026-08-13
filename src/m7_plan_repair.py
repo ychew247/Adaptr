@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 import json
 import logging
 import re
 from typing import Any, Mapping, Sequence
 
-from src.m5_readiness_score import compute_readiness
+from src.m5_readiness_score import compute_readiness, has_hard_pain_flag
 from src.m6_plan_constraints import derive_plan_constraints
 from src.m6_plan_validator import validate_plan
 from src.ollama_workout_plan_generator import PlanGenerationFormatError
@@ -343,16 +343,20 @@ def determine_repair_action(
 ) -> dict[str, Any]:
     """Map safety/readiness bands to deterministic repair actions."""
     trigger = trigger_text.lower()
-    pain_gate = bool(readiness.get("safety_triggered")) or any(
-        word in trigger for word in ("sharp", "worsening", "severe", "persistent")
-    )
+    time_available_minutes = _time_available_minutes(trigger)
+    pain_gate = bool(readiness.get("safety_triggered")) or has_hard_pain_flag(trigger)
     if pain_gate:
         action = "recovery_substitution"
         reason = "Pain gate overrides normal training and requires recovery-only work."
     elif "miss" in trigger or "skip" in trigger:
         action = "reschedule_session"
         reason = "Missed-session trigger moves one session without increasing weekly volume."
-    elif "time" in trigger or "busy" in trigger or "short" in trigger:
+    elif (
+        "time" in trigger
+        or "busy" in trigger
+        or "short" in trigger
+        or time_available_minutes is not None
+    ):
         action = "shorten_session"
         reason = "Limited-time trigger shortens one session while preserving the weekly goal."
     else:
@@ -363,6 +367,7 @@ def determine_repair_action(
         "reason": reason,
         "pain_gate": pain_gate,
         "required_intensity_band": _intensity_for_action(action, readiness),
+        "time_available_minutes": time_available_minutes,
     }
 
 
@@ -381,7 +386,11 @@ def apply_repair_action(
     sessions = deepcopy(list(candidate.get("sessions") or []))
     if not sessions:
         raise PlanRepairError("Active plan has no sessions to repair.")
-    target_index = _target_session_index(sessions, repair_action["action"])
+    target_index = _target_session_index(
+        sessions,
+        repair_action["action"],
+        latest_checkin.get("checkin_date"),
+    )
     original_session = sessions[target_index]
     replacement = dict(suggested_edit.get("replacement_session") or {})
 
@@ -394,7 +403,10 @@ def apply_repair_action(
         repaired_session["day"] = _next_day(original_session.get("day", "Day 1"))
     elif repair_action["action"] == "shorten_session":
         repaired_session = {**original_session, **replacement}
-        repaired_session["sets_reps"] = replacement.get("sets_reps") or "20-30 minutes, easy-to-moderate"
+        minutes = repair_action.get("time_available_minutes")
+        repaired_session["sets_reps"] = replacement.get("sets_reps") or (
+            f"{minutes} minutes, easy-to-moderate" if minutes is not None else "20-30 minutes, easy-to-moderate"
+        )
     else:
         repaired_session = {**original_session, **replacement}
 
@@ -404,7 +416,12 @@ def apply_repair_action(
     repaired_session["sets_reps"] = repaired_session.get("sets_reps") or original_session.get(
         "sets_reps", "As prescribed"
     )
-    sessions[target_index] = repaired_session
+    if repair_action["action"] == "recovery_substitution":
+        sessions = [repaired_session]
+    else:
+        sessions[target_index] = repaired_session
+    if repair_action["action"] == "reschedule_session":
+        _reschedule_remaining_sessions(sessions, target_index)
     candidate["sessions"] = sessions
     candidate["exercise_names"] = _exercise_names(sessions)
     candidate["intensity_band"] = repair_action["required_intensity_band"]
@@ -454,10 +471,34 @@ def _repair_retrieval_query(
     )
 
 
-def _target_session_index(sessions: Sequence[Mapping[str, Any]], action: str) -> int:
+def _target_session_index(
+    sessions: Sequence[Mapping[str, Any]], action: str, trigger_date: Any | None = None
+) -> int:
+    if trigger_date is not None:
+        target_date = str(trigger_date)
+        for index, session in enumerate(sessions):
+            if session.get("scheduled_date") == target_date and session.get("status", "planned") == "planned":
+                return index
+        for index, session in enumerate(sessions):
+            if session.get("scheduled_date", "") > target_date and session.get("status", "planned") == "planned":
+                return index
     if action == "reschedule_session":
         return len(sessions) - 1
     return 0
+
+
+def _time_available_minutes(trigger_text: str) -> int | None:
+    match = re.search(r"\b(?:only have|have)\s+(\d{1,3})\s*(?:minutes?|mins?)\b", trigger_text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _reschedule_remaining_sessions(sessions: list[dict[str, Any]], target_index: int) -> None:
+    for session in sessions[target_index:]:
+        scheduled_date = session.get("scheduled_date")
+        if scheduled_date:
+            session["scheduled_date"] = str(date.fromisoformat(scheduled_date) + timedelta(days=1))
 
 
 def _next_day(day: str) -> str:

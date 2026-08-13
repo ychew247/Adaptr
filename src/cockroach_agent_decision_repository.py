@@ -12,7 +12,7 @@ class CockroachAgentDecisionRepository:
         self.connection = connection
 
     def find_repair_by_trigger(
-        self, user_id: str, plan_id: str, trigger_date: str
+        self, user_id: str, _plan_id: str, trigger_date: str
     ) -> dict[str, Any] | None:
         with self.connection.cursor() as cursor:
             cursor.execute(
@@ -22,11 +22,11 @@ class CockroachAgentDecisionRepository:
                   data_used, plan_change, safety_flags, validation_status, validation_notes,
                   retrieved_memory_ids, generation_attempt, created_at
                 FROM agent_decisions
-                WHERE user_id = %s AND plan_id = %s AND trigger_date = %s
+                WHERE user_id = %s AND trigger_date = %s
                   AND decision_type = 'plan_repair'
                 LIMIT 1
                 """,
-                (user_id, plan_id, trigger_date),
+                (user_id, trigger_date),
             )
             row = cursor.fetchone()
         return self._row_to_decision(row) if row else None

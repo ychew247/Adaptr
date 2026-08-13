@@ -77,6 +77,7 @@ def test_generate_weekly_plan_uses_profile_goal_duration_and_readiness():
         profile=PROFILE,
         goal=GOAL,
         readiness={"readiness_score": 84, "band": "train_as_planned", "safety_triggered": False},
+        week_start="2026-08-10",
     )
 
     assert plan["goal_id"] == "goal-1"
@@ -87,6 +88,13 @@ def test_generate_weekly_plan_uses_profile_goal_duration_and_readiness():
     assert len(plan["sessions"]) == 4
     assert "badminton footwork intervals" in plan["exercise_names"]
     assert "upper_body" in plan["target_muscle_groups"]
+    assert [session["scheduled_date"] for session in plan["sessions"]] == [
+        "2026-08-10",
+        "2026-08-12",
+        "2026-08-14",
+        "2026-08-16",
+    ]
+    assert {session["status"] for session in plan["sessions"]} == {"planned"}
 
 
 def test_generate_weekly_plan_reduces_volume_when_readiness_is_lower():

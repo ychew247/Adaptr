@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any, Mapping
 
+from src.m5_readiness_score import has_hard_pain_flag
 
 LOGGER = logging.getLogger(__name__)
 
@@ -110,9 +111,8 @@ def derive_plan_constraints(
 def _safety_reason(readiness: Mapping[str, Any], pain_text: str) -> str | None:
     if readiness.get("safety_triggered"):
         return "Readiness safety gate was triggered."
-    for word in _PAIN_WORDS:
-        if word in pain_text:
-            return f"Check-in contains a hard pain flag: {word}."
+    if has_hard_pain_flag(pain_text):
+        return "Check-in contains a hard pain flag."
     return None
 
 

@@ -171,6 +171,18 @@ def test_missed_session_repairs_even_when_readiness_is_high():
     assert repairs.calls[0]["trigger_text"] == "I missed my session."
 
 
+def test_limited_minutes_repairs_even_when_readiness_is_high():
+    readiness = {"readiness_score": 85, "band": "train_as_planned", "safety_triggered": False}
+    checkin = {**CHECKIN, "free_text_note": "I only have 15 minutes today."}
+    agent, plans, repairs, _ = _build_agent(readiness, checkin=checkin)
+
+    result = agent.run_daily_flow(USER, workout_today=True, ask=lambda _: "Only 15 minutes today.")
+
+    assert result["action"] == "repair_applied"
+    assert plans.calls == []
+    assert repairs.calls[0]["trigger_text"] == "I only have 15 minutes today."
+
+
 def test_result_is_gui_ready():
     readiness = {"readiness_score": 85, "band": "train_as_planned", "safety_triggered": False}
     agent, _, _, _ = _build_agent(readiness)

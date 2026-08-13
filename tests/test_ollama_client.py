@@ -27,7 +27,9 @@ def test_chat_posts_to_ollama_chat_api_and_returns_content():
     http = FakeHttp()
     client = OllamaClient(base_url="http://localhost:11434", model="llama3.2", http=http)
 
-    content = client.chat_json_instruction("Extract JSON", "I want fat loss over 8 weeks")
+    content = client.chat_json_instruction(
+        "Extract JSON", "I want fat loss over 8 weeks", require_json=True
+    )
 
     assert content == '{"goal_type":"fat_loss"}'
     assert http.calls[0] == {
@@ -38,10 +40,20 @@ def test_chat_posts_to_ollama_chat_api_and_returns_content():
                 {"role": "system", "content": "Extract JSON"},
                 {"role": "user", "content": "I want fat loss over 8 weeks"},
             ],
+            "format": "json",
             "stream": False,
         },
         "timeout": 60,
     }
+
+
+def test_chat_omits_json_mode_for_plain_text_requests():
+    http = FakeHttp()
+    client = OllamaClient(base_url="http://localhost:11434", model="llama3.2", http=http)
+
+    client.chat_json_instruction("Write a short note", "Training went well", require_json=False)
+
+    assert "format" not in http.calls[0]["json"]
 
 
 def test_embed_posts_to_ollama_embed_api_and_returns_first_embedding():

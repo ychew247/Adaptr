@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 import re
 
 from src.m5_readiness_score import compute_readiness
@@ -26,6 +26,9 @@ def generate_weekly_plan(profile, goal, readiness, week_start=None, week_number=
             adjustment,
         )
 
+    resolved_week_start = str(week_start or date.today())
+    sessions = schedule_sessions(sessions, resolved_week_start)
+
     exercise_names = _unique(
         exercise
         for session in sessions
@@ -34,7 +37,7 @@ def generate_weekly_plan(profile, goal, readiness, week_start=None, week_number=
 
     return {
         "goal_id": goal["id"],
-        "week_start": str(week_start or date.today()),
+        "week_start": resolved_week_start,
         "week_number": week_number,
         "plan_duration_weeks": goal.get("plan_duration_weeks"),
         "goal_type": goal["goal_type"],
@@ -115,6 +118,26 @@ def _readiness_from_checkins(checkins):
         }
 
     return compute_readiness(list(reversed(checkins[1:])), checkins[0])
+
+
+def schedule_sessions(sessions, week_start):
+    """Spread ordered sessions across the plan week without overwriting explicit dates."""
+    start = date.fromisoformat(str(week_start))
+    count = len(sessions)
+    if count == 0:
+        return []
+
+    scheduled = []
+    for index, session in enumerate(sessions):
+        offset = 0 if count == 1 else round(index * 6 / (count - 1))
+        scheduled.append(
+            {
+                **session,
+                "scheduled_date": session.get("scheduled_date") or str(start + timedelta(days=offset)),
+                "status": session.get("status") or "planned",
+            }
+        )
+    return scheduled
 
 
 def _parse_training_days(availability):

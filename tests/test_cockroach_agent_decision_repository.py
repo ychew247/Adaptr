@@ -79,7 +79,7 @@ def test_create_repair_decision_persists_the_module6_audit_fields():
     assert saved["validation_status"] == "validated"
 
 
-def test_find_repair_by_trigger_uses_the_idempotency_key():
+def test_find_repair_by_trigger_is_scoped_to_user_and_date_across_plan_versions():
     connection = FakeConnection([None])
 
     result = CockroachAgentDecisionRepository(connection).find_repair_by_trigger(
@@ -89,9 +89,9 @@ def test_find_repair_by_trigger_uses_the_idempotency_key():
     query, params = connection.cursor_instance.queries[0]
     assert result is None
     assert "user_id = %s" in query
-    assert "plan_id = %s" in query
+    assert "plan_id = %s" not in query
     assert "trigger_date = %s" in query
-    assert params == ("user-1", "plan-1", "2026-08-04")
+    assert params == ("user-1", "2026-08-04")
 
 
 def test_insert_params_serializes_decimal_values_in_json_payloads():

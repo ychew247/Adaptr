@@ -83,7 +83,7 @@ def test_static_profile_onboarding_prompts_include_guidance_and_examples():
         "Age in years, e.g. 25:",
         "Height in cm, e.g. 175:",
         "Starting weight in kg, e.g. 72.5:",
-        "Training experience. Choose beginner, intermediate, or advanced. Example: beginner = less than 6 months consistent training:",
+        "Training experience. Choose beginner, intermediate, or advanced. Beginner = gym or sport experience up to 1 month, or you just started a specific sport. Intermediate = trained consistently for 1-12 months. Advanced = trained consistently for more than 12 months:",
         "Equipment access, comma-separated. Examples: bodyweight only, dumbbells, resistance bands, full gym, treadmill:",
         "Weekly availability. Example: 3 days/week, 45 minutes each, Mon/Wed/Fri evenings:",
         "Injury notes. Example: knee pain during squats, old ankle sprain, lower back tightness, or none:",

@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 from src.m5_readiness_score import compute_readiness
 from src.m6_plan_constraints import derive_plan_constraints
 from src.m6_plan_validator import validate_plan
-from src.m6_workout_plan import generate_weekly_plan
+from src.m6_workout_plan import generate_weekly_plan, schedule_sessions
 from src.ollama_workout_plan_generator import PlanGenerationFormatError
 
 
@@ -276,10 +276,12 @@ def _complete_plan(
 ) -> dict[str, Any]:
     completed = dict(plan)
     sessions = list(completed.get("sessions") or [])
+    week_start = completed.get("week_start") or str(date.today())
+    sessions = schedule_sessions(sessions, week_start)
     completed.update(
         {
             "goal_id": goal["id"],
-            "week_start": completed.get("week_start") or str(date.today()),
+            "week_start": week_start,
             "week_number": completed.get("week_number") or 1,
             "plan_duration_weeks": goal.get("plan_duration_weeks"),
             "goal_type": goal.get("goal_type"),

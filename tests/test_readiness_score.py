@@ -66,6 +66,22 @@ def test_compute_readiness_applies_pain_gate_for_sharp_or_worsening_pain():
     assert result["components"]["pain_gate_applied"] is True
 
 
+def test_compute_readiness_ignores_negated_hard_pain_terms():
+    result = compute_readiness(
+        user_history=[],
+        today_checkin={
+            "sleep_hours": 6.5,
+            "stress_level": 4,
+            "energy_level": 3,
+            "soreness_level": 3,
+            "pain_notes": "mild shoulder ache, not sharp",
+        },
+    )
+
+    assert result["safety_triggered"] is False
+    assert result["components"]["pain_gate_applied"] is False
+
+
 def test_compute_readiness_handles_cold_start_with_population_defaults():
     result = compute_readiness(
         user_history=[],

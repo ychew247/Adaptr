@@ -27,4 +27,17 @@ class OllamaNutritionNoteGenerator:
             "do not change, recalculate, or add nutrition numbers. Give meal timing or snack ideas "
             "that respect diet preferences and finish with one short adherence question. Return plain text."
         )
-        return self.client.chat_json_instruction(instruction, json.dumps(prompt))
+        content = self.client.chat_json_instruction(
+            instruction, json.dumps(prompt), require_json=False
+        )
+        return _plain_note(content)
+
+
+def _plain_note(content: str) -> str:
+    """Accept a plain note and unwrap legacy models that still return JSON."""
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return content.strip()
+    note = payload.get("note") if isinstance(payload, dict) else None
+    return note.strip() if isinstance(note, str) and note.strip() else content.strip()

@@ -18,3 +18,6 @@ CREATE TABLE IF NOT EXISTS daily_checkins (
 
 CREATE INDEX IF NOT EXISTS daily_checkins_user_date_idx
 ON daily_checkins (user_id, checkin_date DESC, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS daily_checkins_user_date_unique_idx
+ON daily_checkins (user_id, checkin_date);

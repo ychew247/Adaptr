@@ -1,3 +1,6 @@
+from src.fitness_chat import TRAINING_EXPERIENCE_LEVEL_GUIDE
+
+
 def parse_int(value: str, field_name: str) -> int:
     try:
         parsed = int(value.strip())
@@ -24,6 +27,18 @@ def parse_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def training_experience_onboarding_prompt() -> str:
+    guide = TRAINING_EXPERIENCE_LEVEL_GUIDE.replace("; intermediate", ". Intermediate").replace(
+        "; advanced", ". Advanced"
+    )
+    return (
+        "Training experience. Choose beginner, intermediate, or advanced. "
+        + guide[0].upper()
+        + guide[1:]
+        + ":"
+    )
+
+
 class StaticProfileService:
     def __init__(self, repository):
         self.repository = repository
@@ -46,8 +61,7 @@ class StaticProfileService:
                 ask("Starting weight in kg, e.g. 72.5:"), "starting weight"
             ),
             "training_experience": ask(
-                "Training experience. Choose beginner, intermediate, or advanced. "
-                "Example: beginner = less than 6 months consistent training:"
+                training_experience_onboarding_prompt()
             ),
             "equipment_access": parse_list(
                 ask(

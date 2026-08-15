@@ -177,12 +177,12 @@ class RetryingRepairGenerator:
         }
 
 
-def _service(generator, decision_repository=None, decision_log=None):
+def _service(generator, decision_repository=None, decision_log=None, plan_repository=None):
     return PlanRepairService(
         profile_repository=ProfileRepository(),
         goal_repository=GoalRepository(),
         checkin_repository=CheckinRepository(),
-        plan_repository=PlanRepository(),
+        plan_repository=plan_repository or PlanRepository(),
         decision_repository=decision_repository or DecisionRepository(),
         decision_log=decision_log,
         memory_repository=MemoryRepository(),
@@ -277,7 +277,8 @@ def test_pain_gate_keeps_deterministic_recovery_exercises_despite_model_suggesti
         "easy walk",
         "pain-free range of motion",
     ]
-    assert len(candidate["sessions"]) == 1
+    assert len(candidate["sessions"]) == 2
+    assert candidate["sessions"][1]["focus"] == "Safety-first recovery"
     assert candidate["intensity_band"] == "recovery"
 
 
@@ -355,3 +356,52 @@ def test_negated_pain_does_not_select_a_recovery_repair():
 
     assert action["pain_gate"] is False
     assert action["action"] == "reschedule_session"
+
+
+def test_rescheduling_only_moves_the_target_session_without_renumbering_or_shifting_the_week():
+    prior_plan = {
+        "sessions": [
+            {"day": "Day 1", "scheduled_date": "2026-08-22", "status": "planned"},
+            {"day": "Day 2", "scheduled_date": "2026-08-24", "status": "planned"},
+        ]
+    }
+    readiness = {"readiness_score": 80, "band": "train_as_planned", "safety_triggered": False}
+
+    candidate = apply_repair_action(
+        prior_plan,
+        determine_repair_action(readiness, "I missed today's workout."),
+        {"replacement_session": {}},
+        {},
+        readiness,
+        {"checkin_date": "2026-08-22"},
+        [],
+        1,
+    )
+
+    assert candidate["sessions"][0]["day"] == "Day 1"
+    assert candidate["sessions"][0]["scheduled_date"] == "2026-08-23"
+    assert candidate["sessions"][1]["day"] == "Day 2"
+    assert candidate["sessions"][1]["scheduled_date"] == "2026-08-24"
+
+
+def test_repair_updates_the_existing_week_instead_of_creating_a_duplicate_plan_row():
+    class InPlacePlanRepository(PlanRepository):
+        def __init__(self):
+            super().__init__()
+            self.updated = []
+
+        def update_plan_after_repair(self, plan_id, plan):
+            self.updated.append({"plan_id": plan_id, "plan": plan})
+            return {"id": plan_id, **plan}
+
+    plans = InPlacePlanRepository()
+    service = _service(RetryingRepairGenerator(), plan_repository=plans)
+
+    assert service.run_repair(
+        {"id": "user-1", "display_name": "Alex"},
+        trigger_text="My wrist is sore. Please repair today's session.",
+        trigger_date="2026-08-04",
+    ) == "repair_applied"
+
+    assert plans.updated[0]["plan_id"] == "prior-plan-1"
+    assert plans.created == []

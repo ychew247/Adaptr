@@ -8,6 +8,8 @@ from typing import Any, Callable, Mapping, TypedDict
 from src.m5_readiness_score import compute_readiness
 from src.m6_hybrid_workout_plan import PlanGenerationError
 from src.m7_plan_repair import PlanRepairError
+from src.dated_workout_sessions import needs_plan_refresh, resolve_checkin_session
+from src.workout_plan_selection import find_plan_for_date
 
 
 class AgentFlowResult(TypedDict):
@@ -53,6 +55,17 @@ class AdaptiveFitnessAgent:
         say=print,
     ) -> AgentFlowResult:
         checkin = self.checkin_service.run_checkin(user, ask=ask, say=say)
+        active_plan = self._plan_for_checkin_date(user, checkin)
+        if active_plan and (active_plan.get("plan_json") or {}).get("sessions"):
+            resolution = resolve_checkin_session(
+                active_plan["plan_json"]["sessions"],
+                str(checkin.get("checkin_date")),
+                str(checkin.get("workout_completed") or "unknown"),
+            )
+            if resolution["action"] in {"mark_completed", "mark_missed"}:
+                self.plan_repository.update_plan_sessions(active_plan["id"], resolution["sessions"])
+            elif resolution["action"] == "ask_completed_session":
+                say("I need to know which dated workout you completed before I update the plan.")
         history = self.checkin_repository.find_recent_by_user_id(user["id"], limit=30)
         readiness = self.readiness_calculator(list(reversed(history[1:])), checkin)
         readiness_decision = self.decision_log.log_readiness_assessment(
@@ -66,6 +79,7 @@ class AdaptiveFitnessAgent:
             readiness,
             parent_decision_id,
             say,
+            active_plan=active_plan,
         )
         nutrition = self.nutrition_service.run_daily_target(
             user,
@@ -74,7 +88,7 @@ class AdaptiveFitnessAgent:
             readiness=readiness,
             parent_decision_id=parent_decision_id,
         )
-        plan = self.plan_repository.find_active_by_user_id(user["id"])
+        plan = self._plan_for_checkin_date(user, checkin)
         summary = self._build_summary(user, readiness, action, plan)
         say(summary)
 
@@ -94,8 +108,19 @@ class AdaptiveFitnessAgent:
         readiness: Mapping[str, Any],
         parent_decision_id: str | None,
         say: Callable[[str], None],
+        *,
+        active_plan: Mapping[str, Any] | None = None,
     ) -> str:
-        active_plan = self.plan_repository.find_active_by_user_id(user["id"])
+        if active_plan is None:
+            active_plan = self._plan_for_checkin_date(user, checkin)
+        if needs_plan_refresh(active_plan):
+            return self.plan_service.run_plan_generation(
+                user,
+                readiness=readiness,
+                latest_checkin=checkin,
+                parent_decision_id=parent_decision_id,
+                say=say,
+            )
         try:
             if active_plan is None:
                 return self.plan_service.run_plan_generation(
@@ -115,9 +140,31 @@ class AdaptiveFitnessAgent:
                     parent_decision_id=parent_decision_id,
                     say=say,
                 )
+            if self._active_plan_needs_refresh(user, active_plan, readiness, checkin):
+                return self.plan_service.run_plan_generation(
+                    user,
+                    readiness=readiness,
+                    latest_checkin=checkin,
+                    parent_decision_id=parent_decision_id,
+                    say=say,
+                )
         except (PlanGenerationError, PlanRepairError):
             return "plan_action_failed"
         return "keep_plan"
+
+    def _plan_for_checkin_date(
+        self, user: Mapping[str, Any], checkin: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        active_plan = self.plan_repository.find_active_by_user_id(user["id"])
+        checkin_date = checkin.get("checkin_date")
+        if not checkin_date:
+            return active_plan
+        return find_plan_for_date(
+            self.plan_repository,
+            user_id=user["id"],
+            reference_date=str(checkin_date),
+            fallback_plan=active_plan,
+        )
 
     @staticmethod
     def _should_repair(
@@ -132,6 +179,20 @@ class AdaptiveFitnessAgent:
         note = (checkin.get("free_text_note") or "").lower()
         return any(word in note for word in ("limited time", "short on time", "too busy")) or bool(
             re.search(r"\b(?:only have|have)\s+\d{1,3}\s*(?:minutes?|mins?)\b", note)
+        )
+
+    def _active_plan_needs_refresh(
+        self,
+        user: Mapping[str, Any],
+        active_plan: Mapping[str, Any] | None,
+        readiness: Mapping[str, Any],
+        checkin: Mapping[str, Any],
+    ) -> bool:
+        checker = getattr(self.plan_service, "active_plan_needs_refresh", None)
+        if checker is None or active_plan is None:
+            return False
+        return bool(
+            checker(user, active_plan, readiness=readiness, latest_checkin=checkin)
         )
 
     @staticmethod

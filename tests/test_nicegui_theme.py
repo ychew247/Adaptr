@@ -13,7 +13,7 @@ def test_desktop_chat_layout_uses_the_space_remaining_after_the_sidebar():
     assert 'body:has(.q-drawer--left[style*="translateX(0px)"]) .fa-composer-shell { left: 256px; }' in theme
     assert ".fa-composer-shell { position: fixed; left: 0; right: 0; bottom: 0; box-sizing: border-box; padding: 16px max(5vw, 32px) 22px; background: transparent;" in theme
     assert 'ui.left_drawer(value=True).props("width=256 show-if-above breakpoint=760")' in chat
-    assert 'with ui.column().classes("fa-main w-full"):' in chat
+    assert 'with ui.column().classes("fa-main fa-dot-grid w-full"):' in chat
 
 
 def test_welcome_screen_has_a_centered_headline_and_composer_before_chat_begins():
@@ -25,3 +25,31 @@ def test_welcome_screen_has_a_centered_headline_and_composer_before_chat_begins(
     assert ".fa-welcome-composer { top: 50%; bottom: auto;" in theme
     assert "self.welcome_stage.visible = is_welcome" in chat
     assert "self.composer_shell.classes(add=\"fa-welcome-composer\")" in chat
+
+
+def test_dark_lime_visual_system_uses_the_project_logo_without_changing_chat_controls():
+    theme = (PROJECT_ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+    chat = (PROJECT_ROOT / "ui" / "chat.py").read_text(encoding="utf-8")
+
+    assert "--fa-bg: #0d0d14;" in theme
+    assert "--fa-accent: #a3e635;" in theme
+    assert 'ui.colors(primary="#a3e635"' in theme
+    assert ".fa-dot-grid" in theme
+    assert 'ui.image("/assets/Logo.svg").classes("fa-brand-logo")' in chat
+    assert "self._stop_current_request" in chat
+
+
+def test_workspace_keeps_appearance_toggle_without_the_inspector_control():
+    chat = (PROJECT_ROOT / "ui" / "chat.py").read_text(encoding="utf-8")
+
+    assert 'ui.button("Appearance", icon="dark_mode", on_click=self.dark_mode.toggle)' in chat
+    assert "Inspector" not in chat
+    assert "_toggle_inspector" not in chat
+
+
+def test_topbar_title_stays_legible_when_light_mode_keeps_the_dark_topbar():
+    theme = (PROJECT_ROOT / "ui" / "theme.py").read_text(encoding="utf-8")
+    chat = (PROJECT_ROOT / "ui" / "chat.py").read_text(encoding="utf-8")
+
+    assert 'ui.label("Fitness Agent").classes("fa-topbar-title font-semibold")' in chat
+    assert ".fa-topbar-title { color: #f2f0f8 !important; }" in theme

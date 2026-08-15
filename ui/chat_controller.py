@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections import deque
+from datetime import date, timedelta
 from typing import Any, Callable
 
 from src.fitness_agent_runtime import build_runtime, database_connection
 from src.fitness_chat import (
     PROFILE_QUESTIONS,
     format_daily_result,
-    is_plan_export_request,
     profile_answers_to_queue,
 )
 from src.m1_user_identity import UserIdentityService
@@ -20,8 +20,10 @@ from src.m3_training_goal import (
     build_follow_up_prompt,
     parse_training_goal,
 )
+from src.m15_safety_validity import assess_safety
 from src.ollama_chat_language import OllamaChatLanguage
 from src.ollama_client import OllamaClient
+from src.workout_plan_selection import find_plan_for_date
 from src.workout_plan_excel_export import export_sessions_workbook_bytes
 from ui.chat_state import ChatSession
 
@@ -53,14 +55,24 @@ class FitnessChatController:
 
     def complete_message(self, message: str) -> None:
         """Run the potentially slow agent work for an already rendered message."""
-        try:
-            self._route_message(message)
-            self.session.status = "Ready"
-        except Exception as error:
-            self.session.add_message("assistant", _friendly_error(error))
-            self.session.status = "Needs attention"
+        retryable_phase = self.session.phase in {"identity", "profile", "goal", "goal_follow_up"}
+        for attempt in range(2):
+            try:
+                self._route_message(message)
+                self.session.status = "Ready"
+                return
+            except Exception as error:
+                if attempt == 0 and retryable_phase and _is_transient_database_error(error):
+                    continue
+                self.session.add_message("assistant", _friendly_error(error))
+                self.session.status = "Needs attention"
+                return
 
     def _route_message(self, message: str) -> None:
+        assessment = assess_safety(message)
+        if assessment["highest_severity"] in {"urgent", "blocked"}:
+            self.session.add_message("assistant", assessment["reason"])
+            return
         if self.session.phase == "identity":
             self._handle_identity(message)
         elif self.session.phase == "profile":
@@ -125,21 +137,28 @@ class FitnessChatController:
         self.session.add_message("assistant", f"Your profile is saved. {GENERAL_GOAL_PROMPT}")
 
     def _handle_goal(self, answer: str) -> None:
-        parsed = parse_training_goal(answer)
+        parsed = self._parse_goal(answer)
         missing = parsed["goal_details"]["missing_fields"]
         if missing:
             self.session.goal_text = answer
             self.session.phase = "goal_follow_up"
             self.session.add_message("assistant", build_follow_up_prompt(missing))
             return
-        self._save_goal([answer])
+        self._save_goal([answer], parsed_goal=parsed)
 
-    def _save_goal(self, answers: list[str]) -> None:
+    def _save_goal(self, answers: list[str], parsed_goal: dict[str, Any] | None = None) -> None:
         with database_connection() as connection:
             runtime = build_runtime(connection)
+            parser = (
+                (lambda _text: parsed_goal)
+                if parsed_goal is not None
+                else (lambda text: self._parse_goal_with_parser(text, runtime["goal_parser"]))
+            )
             _run_with_answers(
-                lambda ask: TrainingGoalService(runtime["goals"]).run_goal_setup(
-                    self.session.user, ask=ask, say=lambda _message: None
+                lambda ask: TrainingGoalService(runtime["goals"], parser=parser).run_goal_setup(
+                    self.session.user,
+                    ask=ask,
+                    say=lambda _message: None,
                 ),
                 answers,
             )
@@ -148,47 +167,153 @@ class FitnessChatController:
         self.session.add_message(
             "assistant",
             "Your goal is saved and your plan is ready to build. How are you feeling today? "
-            "Include sleep, energy, stress, soreness or pain, nutrition, and whether you plan to train.",
+            "Include sleep, energy, stress, soreness or pain, and nutrition.",
         )
+
+    def _parse_goal(self, text: str) -> dict[str, Any]:
+        with database_connection() as connection:
+            runtime = build_runtime(connection)
+            return self._parse_goal_with_parser(text, runtime["goal_parser"])
+
+    @staticmethod
+    def _parse_goal_with_parser(text: str, parser: Any) -> dict[str, Any]:
+        try:
+            parsed = parser.parse(text)
+            duration = parsed.get("plan_duration_weeks")
+            if duration is not None and (not isinstance(duration, int) or duration <= 0):
+                raise ValueError("invalid duration")
+            return parsed
+        except Exception:
+            return parse_training_goal(text)
 
     def _handle_daily_message(self, message: str) -> None:
         with database_connection() as connection:
             runtime = build_runtime(connection, include_agent=True)
+            profile = runtime["profiles"].find_by_user_id(self.session.user["id"])
+            assessment = assess_safety(message, profile=profile)
+            if assessment["highest_severity"] in {"urgent", "blocked"}:
+                self.session.add_message("assistant", assessment["reason"])
+                return
             if self.session.awaiting_printable_plan:
-                outcome = runtime["chat_language"].classify_printable_plan_reply(message)
-                if outcome["intent"] == "accept":
+                try:
+                    printable = runtime["chat_language"].classify_printable_plan_reply(message)
+                except Exception:
+                    printable = {"intent": "unclear", "response": ""}
+                if printable["intent"] == "accept":
                     self.session.awaiting_printable_plan = False
                     self._add_plan_download(
                         self.session.pending_printable_plan,
                         self.session.download_ready_message,
                     )
                     return
-                self.session.add_message("assistant", outcome["response"])
-                if outcome["intent"] == "decline":
+                if printable["intent"] == "decline":
                     self.session.awaiting_printable_plan = False
                     self.session.pending_printable_plan = None
                     self.session.download_ready_message = ""
+                    self.session.add_message("assistant", printable["response"])
+                    return
+            plan = self._plan_for_reference_date(runtime, date.today())
+            is_initial_plan_checkin = plan is None
+            intent_context = self._daily_phase_context(profile, plan)
+            intent_context["awaiting_printable_plan"] = self.session.awaiting_printable_plan
+            try:
+                outcome = runtime["chat_language"].classify_daily_phase_message(
+                    message, context=intent_context
+                )
+            except Exception:
+                self.session.add_message(
+                    "assistant",
+                    "I could not reliably interpret that yet. Please share a check-in with sleep, energy, soreness or pain, and whether you completed today's workout; or ask for a specific plan view.",
+                )
                 return
 
-            if is_plan_export_request(message):
-                plan = runtime["plans"].find_active_by_user_id(self.session.user["id"])
+            if outcome["intent"] in {"current_week_plan", "specific_session"}:
+                self._show_current_week_plan(
+                    runtime,
+                    requested_day_lookup=outcome["intent"] == "specific_session",
+                    offer_download=outcome["plan_delivery"] != "chat",
+                )
+                return
+            if outcome["intent"] == "remaining_plan":
+                self._show_remaining_week_plan(runtime)
+                return
+            if outcome["intent"] == "next_week":
+                authorization = self._authorize_action(
+                    runtime, message, proposed_action="next_week", context=intent_context
+                )
+                if authorization["decision"] != "confirm":
+                    self.session.add_message("assistant", authorization["response"])
+                    return
+                self._release_next_week_plan(runtime)
+                return
+            if outcome["intent"] == "plan_export":
+                authorization = self._authorize_action(
+                    runtime, message, proposed_action="plan_export", context=intent_context
+                )
+                if authorization["decision"] != "confirm":
+                    self.session.add_message("assistant", authorization["response"])
+                    return
                 if plan is None:
-                    self.session.add_message(
-                        "assistant", "There is no active workout plan yet. Share today’s check-in first."
-                    )
+                    self.session.add_message("assistant", "There is no active workout plan to export yet.")
                     return
                 presentation = runtime["plan_presenter"].generate(plan, {})
                 self._add_plan_download(plan, presentation["download_ready"])
                 return
+            if outcome["intent"] == "printable_accept" and self.session.awaiting_printable_plan:
+                self.session.awaiting_printable_plan = False
+                self._add_plan_download(
+                    self.session.pending_printable_plan,
+                    self.session.download_ready_message,
+                )
+                return
+            if outcome["intent"] == "printable_decline" and self.session.awaiting_printable_plan:
+                self.session.awaiting_printable_plan = False
+                self.session.pending_printable_plan = None
+                self.session.download_ready_message = ""
+                self.session.add_message("assistant", outcome["response"])
+                return
+            if outcome["intent"] != "daily_checkin":
+                self._answer_daily_phase_question(runtime, message, intent_context, outcome["response"])
+                return
+            authorization = self._authorize_action(
+                runtime, message, proposed_action="daily_checkin", context=intent_context
+            )
+            if authorization["decision"] != "confirm":
+                self.session.add_message("assistant", authorization["response"])
+                return
+            if authorization["workout_today"] == "unknown" and not is_initial_plan_checkin:
+                self.session.add_message(
+                    "assistant",
+                    "Before I save today’s check-in, are you planning to train today?",
+                )
+                return
 
             result = runtime["agent"].run_daily_flow(
                 self.session.user,
-                workout_today=_mentions_training_today(message),
+                workout_today=(
+                    True
+                    if is_initial_plan_checkin
+                    else authorization["workout_today"] == "yes"
+                ),
                 ask=lambda _prompt: message,
                 say=lambda _message: None,
             )
-            plan = runtime["plans"].find_active_by_user_id(self.session.user["id"])
+            plan = self._plan_for_reference_date(runtime, date.today())
             if plan is None:
+                self.session.add_message("assistant", format_daily_result(result))
+                return
+            follow_up_intent = outcome.get("follow_up_intent", "none")
+            if follow_up_intent != "none":
+                self.session.add_message("assistant", format_daily_result(result))
+                self._show_confirmed_checkin_follow_up(
+                    runtime,
+                    message,
+                    intent_context,
+                    follow_up_intent,
+                    outcome["plan_delivery"],
+                )
+                return
+            if result["action"] not in {"plan_ready", "repair_applied"}:
                 self.session.add_message("assistant", format_daily_result(result))
                 return
             presentation = runtime["plan_presenter"].generate(plan, result["readiness"])
@@ -198,6 +323,190 @@ class FitnessChatController:
             "assistant",
             presentation["introduction"],
             plan=plan,
+            as_of_date=str(result["checkin"].get("checkin_date") or ""),
+            print_question=presentation["print_question"],
+        )
+        self.session.awaiting_printable_plan = True
+        self.session.pending_printable_plan = plan
+        self.session.download_ready_message = presentation["download_ready"]
+
+    @staticmethod
+    def _daily_phase_context(profile: dict[str, Any] | None, plan: dict[str, Any] | None) -> dict[str, Any]:
+        plan_json = (plan or {}).get("plan_json") or {}
+        return {
+            "has_active_plan": plan is not None,
+            "awaiting_printable_plan": False,
+            "profile": profile or {},
+            "week_start": plan_json.get("week_start"),
+            "sessions": plan_json.get("sessions") or [],
+        }
+
+    def _plan_for_reference_date(
+        self,
+        runtime: dict[str, Any],
+        reference_date: date,
+        *,
+        fallback_on_miss: bool = True,
+    ) -> dict[str, Any] | None:
+        active_plan = runtime["plans"].find_active_by_user_id(self.session.user["id"])
+        return find_plan_for_date(
+            runtime["plans"],
+            user_id=self.session.user["id"],
+            reference_date=reference_date,
+            fallback_plan=active_plan,
+            fallback_on_miss=fallback_on_miss,
+        )
+
+    @staticmethod
+    def _authorize_action(
+        runtime: dict[str, Any],
+        message: str,
+        *,
+        proposed_action: str,
+        context: dict[str, Any],
+    ) -> dict[str, str]:
+        """Turn an Ollama proposal into a separately authorized application action."""
+        try:
+            return runtime["chat_language"].authorize_action(
+                message,
+                proposed_action=proposed_action,
+                context=context,
+            )
+        except Exception:
+            return {
+                "decision": "clarify",
+                "workout_today": "unknown",
+                "response": "I need to confirm that request before I update your plan or record.",
+            }
+
+    def _show_confirmed_checkin_follow_up(
+        self,
+        runtime: dict[str, Any],
+        message: str,
+        context: dict[str, Any],
+        follow_up_intent: str,
+        plan_delivery: str,
+    ) -> None:
+        """Perform one explicit read/view request after a saved check-in."""
+        if follow_up_intent in {"current_week_plan", "specific_session"}:
+            self._show_current_week_plan(
+                runtime,
+                requested_day_lookup=follow_up_intent == "specific_session",
+                offer_download=plan_delivery == "download",
+            )
+            return
+        if follow_up_intent == "remaining_plan":
+            self._show_remaining_week_plan(runtime)
+            return
+        if follow_up_intent == "next_week":
+            authorization = self._authorize_action(
+                runtime, message, proposed_action="next_week", context=context
+            )
+            if authorization["decision"] == "confirm":
+                self._release_next_week_plan(runtime)
+            else:
+                self.session.add_message("assistant", authorization["response"])
+
+    def _answer_daily_phase_question(
+        self,
+        runtime: dict[str, Any],
+        message: str,
+        context: dict[str, Any],
+        fallback: str,
+    ) -> None:
+        context["awaiting_printable_plan"] = self.session.awaiting_printable_plan
+        try:
+            response = runtime["chat_language"].answer_daily_phase_question(
+                message, context=context
+            )
+        except Exception:
+            response = fallback
+        self.session.add_message("assistant", response)
+
+    def _show_current_week_plan(
+        self,
+        runtime: dict[str, Any],
+        *,
+        requested_day_lookup: bool = False,
+        offer_download: bool = True,
+    ) -> None:
+        plan = self._plan_for_reference_date(runtime, date.today())
+        if plan is None:
+            self.session.add_message(
+                "assistant", "There is no active workout plan yet. Share today’s check-in first."
+            )
+            return
+        week_start = str((plan.get("plan_json") or {}).get("week_start") or "")
+        message = "Here is the full current week workout plan for reference."
+        if requested_day_lookup:
+            message = "Here is the full current week workout plan, including earlier days."
+        metadata = {
+            "plan": plan,
+            "as_of_date": week_start,
+            "plan_view": "full_week",
+        }
+        if offer_download:
+            metadata["print_question"] = "Do you want a printable or downloadable workout plan?"
+        self.session.add_message("assistant", message, **metadata)
+        self.session.awaiting_printable_plan = offer_download
+        self.session.pending_printable_plan = plan if offer_download else None
+
+    def _show_remaining_week_plan(self, runtime: dict[str, Any]) -> None:
+        plan = self._plan_for_reference_date(runtime, date.today())
+        if plan is None:
+            self.session.add_message("assistant", "There is no active workout plan yet.")
+            return
+        self.session.add_message(
+            "assistant",
+            "Here are the remaining planned workouts for the current week.",
+            plan=plan,
+            print_question="Do you want a printable or downloadable workout plan?",
+        )
+        self.session.awaiting_printable_plan = True
+        self.session.pending_printable_plan = plan
+
+    def _release_next_week_plan(self, runtime: dict[str, Any]) -> None:
+        next_plan = self._plan_for_reference_date(
+            runtime, date.today() + timedelta(days=7), fallback_on_miss=False
+        )
+        if next_plan is not None:
+            presentation = runtime["plan_presenter"].generate(next_plan, {})
+            self.session.add_message(
+                "assistant",
+                presentation["introduction"],
+                plan=next_plan,
+                as_of_date=str((next_plan.get("plan_json") or {}).get("week_start") or ""),
+                print_question=presentation["print_question"],
+            )
+            self.session.awaiting_printable_plan = True
+            self.session.pending_printable_plan = next_plan
+            self.session.download_ready_message = presentation["download_ready"]
+            return
+        outcome = runtime["agent"].plan_service.release_next_week(
+            self.session.user, say=lambda _message: None
+        )
+        if outcome == "program_complete":
+            self.session.add_message(
+                "assistant",
+                "You have completed the requested program duration. Would you like to start a new program or revise your goal?",
+            )
+            return
+        if outcome == "no_active_plan":
+            self.session.add_message(
+                "assistant", "There is no current week to advance yet. Share a daily check-in first."
+            )
+            return
+        plan = self._plan_for_reference_date(
+            runtime, date.today() + timedelta(days=7), fallback_on_miss=False
+        )
+        if plan is None:
+            plan = runtime["plans"].find_active_by_user_id(self.session.user["id"])
+        presentation = runtime["plan_presenter"].generate(plan, {})
+        self.session.add_message(
+            "assistant",
+            presentation["introduction"],
+            plan=plan,
+            as_of_date=str((plan.get("plan_json") or {}).get("week_start") or ""),
             print_question=presentation["print_question"],
         )
         self.session.awaiting_printable_plan = True
@@ -254,14 +563,6 @@ def _validate_profile_answer(key: str, answer: str) -> str | None:
     return None
 
 
-def _mentions_training_today(message: str) -> bool:
-    normalized = message.lower()
-    no_training = ("no workout", "not training", "rest day", "won't train", "wont train")
-    if any(phrase in normalized for phrase in no_training):
-        return False
-    return any(word in normalized for word in ("workout", "training", "train", "gym", "session"))
-
-
 def _friendly_error(error: Exception) -> str:
     message = str(error)
     if "DATABASE_URL" in message:
@@ -269,3 +570,17 @@ def _friendly_error(error: Exception) -> str:
     if "Connection" in message or "connection" in message:
         return "I could not reach the fitness database right now. Please check the connection and try again."
     return "I could not complete that update. Please try again with a little more detail."
+
+
+def _is_transient_database_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(
+        phrase in message
+        for phrase in (
+            "connection closed unexpectedly",
+            "connection has been closed unexpectedly",
+            "connection reset",
+            "forcibly closed by the remote host",
+            "server closed the connection unexpectedly",
+        )
+    )

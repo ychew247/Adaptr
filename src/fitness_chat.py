@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any, Mapping
 
@@ -56,14 +57,6 @@ def profile_answers_to_queue(answers: Mapping[str, str]) -> list[str]:
     return [answers[key] for key, _prompt in PROFILE_QUESTIONS]
 
 
-def is_plan_export_request(message: str) -> bool:
-    normalized = message.lower()
-    return (
-        any(phrase in normalized for phrase in ("excel", "export"))
-        or ("download" in normalized and any(word in normalized for word in ("plan", "workout", "training")))
-    )
-
-
 def plan_table_rows(plan: Mapping[str, Any]) -> list[dict[str, str]]:
     sessions = (plan.get("plan_json") or {}).get("sessions") or []
     return [
@@ -77,6 +70,24 @@ def plan_table_rows(plan: Mapping[str, Any]) -> list[dict[str, str]]:
         }
         for session in sessions
     ]
+
+
+def remaining_plan_table_rows(plan: Mapping[str, Any], as_of: str | date) -> list[dict[str, str]]:
+    """Return unresolved sessions on or after the check-in date."""
+    cutoff = str(as_of)
+    remaining = {
+        **plan,
+        "plan_json": {
+            **(plan.get("plan_json") or {}),
+            "sessions": [
+                session
+                for session in ((plan.get("plan_json") or {}).get("sessions") or [])
+                if session.get("status", "planned") in {"planned", "rescheduled"}
+                and str(session.get("scheduled_date") or "") >= cutoff
+            ],
+        },
+    }
+    return plan_table_rows(remaining)
 
 
 def format_daily_result(result: Mapping[str, Any]) -> str:

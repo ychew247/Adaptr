@@ -26,6 +26,7 @@ class OllamaClient:
                 {"role": "user", "content": user_text},
             ],
             "stream": False,
+            "options": {"temperature": 0},
         }
         if require_json:
             payload["format"] = "json"

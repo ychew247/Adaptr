@@ -1,4 +1,5 @@
 from src.ollama_goal_parser import OllamaGoalParser
+from ui.chat_controller import FitnessChatController
 
 
 class FakeOllamaClient:
@@ -70,3 +71,75 @@ def test_ollama_goal_parser_marks_missing_required_fields():
     assert parsed["goal_type"] == "sport_conditioning"
     assert parsed["plan_duration_weeks"] is None
     assert parsed["goal_details"]["missing_fields"] == ["desired_outcome", "plan_duration"]
+
+
+def test_ollama_goal_parser_accepts_semantic_duration_notation_from_user_text():
+    client = FakeOllamaClient(
+        '{"goal_type":"sport_conditioning","plan_duration_weeks":4,"athlete_type":"basketball",'
+        '"desired_outcomes":["strength"]}'
+    )
+
+    parsed = OllamaGoalParser(client).parse("make me a month-ish bball plan")
+
+    assert parsed["plan_duration_weeks"] == 4
+    assert parsed["goal_details"]["missing_fields"] == []
+
+
+def test_ollama_goal_parser_normalizes_invalid_goal_type():
+    client = FakeOllamaClient(
+        '{"goal_type":"muscle_gain | sport_conditioning","plan_duration_weeks":4,'
+        '"athlete_type":"recreational athlete","target_muscle_groups":["legs","glutes"],'
+        '"desired_outcomes":["improved strength and power in lower body"]}'
+    )
+
+    parsed = OllamaGoalParser(client).parse(
+        "I am a recreational basketball player. Make me a month-ish program to improve lower-body streng"
+    )
+
+    assert parsed["goal_type"] == "sport_conditioning"
+
+
+def test_ollama_goal_parser_corrects_month_ish_duration():
+    client = FakeOllamaClient(
+        '{"goal_type":"sport_conditioning","plan_duration_weeks":12,'
+        '"athlete_type":"recreational_basketball_player",'
+        '"desired_outcomes":["increased jump height"]}'
+    )
+
+    parsed = OllamaGoalParser(client).parse(
+        "I am a recreational basketball player. Make me a month-ish program to improve lower-body streng"
+    )
+
+    assert parsed["plan_duration_weeks"] == 4
+    assert parsed["goal_details"]["missing_fields"] == []
+
+
+def test_ollama_goal_parser_normalizes_list_fields_from_loose_json():
+    client = FakeOllamaClient(
+        '{"goal_type":"sport_conditioning","plan_duration_weeks":4,'
+        '"athlete_type":"recreational athlete",'
+        '"target_muscle_groups":"lower body",'
+        '"desired_outcomes":"improved power",'
+        '"training_style":["strength training"],'
+        '"sport_specific_focus":{"lower-body emphasis":true,"ignored":false}}'
+    )
+
+    parsed = OllamaGoalParser(client).parse("month-ish basketball lower-body strength")
+
+    assert parsed["goal_details"]["target_muscle_groups"] == ["lower body"]
+    assert parsed["goal_details"]["desired_outcomes"] == ["improved power"]
+    assert parsed["goal_details"]["sport_specific_focus"] == ["lower-body emphasis"]
+
+
+def test_gui_goal_flow_prefers_ollama_duration_interpretation_over_keyword_parser():
+    parser = OllamaGoalParser(
+        FakeOllamaClient(
+            '{"goal_type":"sport_conditioning","plan_duration_weeks":4,'
+            '"athlete_type":"basketball","desired_outcomes":["strength"]}'
+        )
+    )
+
+    parsed = FitnessChatController._parse_goal_with_parser("make me a month-ish bball plan", parser)
+
+    assert parsed["plan_duration_weeks"] == 4
+    assert parsed["goal_details"]["parser"] == "ollama"

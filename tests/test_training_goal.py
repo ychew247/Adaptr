@@ -33,6 +33,15 @@ def test_parse_training_goal_extracts_athlete_muscles_outcomes_and_duration():
     }
 
 
+def test_parse_training_goal_accepts_hyphenated_week_duration_from_the_chat_prompt():
+    parsed = parse_training_goal(
+        "I am a recreational basketball player. Create a balanced 4-week program for agility and conditioning."
+    )
+
+    assert parsed["plan_duration_weeks"] == 4
+    assert "plan_duration" not in parsed["goal_details"]["missing_fields"]
+
+
 def test_parse_training_goal_marks_missing_required_info():
     parsed = parse_training_goal("I play badminton")
 

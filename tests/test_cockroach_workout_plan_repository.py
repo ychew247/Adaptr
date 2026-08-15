@@ -31,6 +31,21 @@ class FakeConnection:
         self.commits += 1
 
 
+class MultipleRowsCursor(FakeCursor):
+    def __init__(self, rows):
+        super().__init__(None)
+        self.rows = rows
+
+    def fetchall(self):
+        return self.rows
+
+
+class MultipleRowsConnection(FakeConnection):
+    def __init__(self, rows):
+        self.cursor_instance = MultipleRowsCursor(rows)
+        self.commits = 0
+
+
 def test_create_active_plan_persists_validation_audit_columns():
     connection = FakeConnection(
         (
@@ -76,3 +91,58 @@ def test_create_active_plan_persists_validation_audit_columns():
     assert saved["validation_status"] == "validated"
     assert saved["retrieved_memory_ids"] == ["memory-1"]
     assert saved["generation_attempt"] == 2
+
+
+def test_find_plan_for_week_skips_a_later_corrupted_duplicate():
+    valid_row = (
+        "original-plan",
+        "user-1",
+        "goal-1",
+        "2026-08-22",
+        ["dumbbell row"],
+        ["legs"],
+        "normal",
+        {
+            "week_start": "2026-08-22",
+            "sessions": [
+                {"day": "Day 1", "scheduled_date": "2026-08-22"},
+                {"day": "Day 2", "scheduled_date": "2026-08-24"},
+            ],
+        },
+        "archived",
+        "validated",
+        {},
+        [],
+        1,
+        "2026-08-15T07:33:30Z",
+    )
+    corrupted_newer_row = (
+        "duplicate-plan",
+        "user-1",
+        "goal-1",
+        "2026-08-22",
+        ["dumbbell row"],
+        ["legs"],
+        "normal",
+        {
+            "week_start": "2026-08-22",
+            "sessions": [
+                {"day": "Day 2", "scheduled_date": "2026-08-23"},
+                {"day": "Day 2", "scheduled_date": "2026-08-25"},
+                {"day": "Day 3", "scheduled_date": "2026-08-27"},
+                {"day": "Day 4", "scheduled_date": "2026-08-29"},
+            ],
+        },
+        "archived",
+        "validated",
+        {},
+        [],
+        1,
+        "2026-08-15T07:36:28Z",
+    )
+
+    selected = CockroachWorkoutPlanRepository(
+        MultipleRowsConnection([corrupted_newer_row, valid_row])
+    ).find_by_user_id_and_week_start("user-1", "2026-08-22")
+
+    assert selected["id"] == "original-plan"

@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 
-SESSION_HEADERS = ["Day", "Focus", "Exercises", "Sets/Reps", "Adjustment"]
+SESSION_HEADERS = ["Date", "Day", "Focus", "Exercises", "Sets/Reps", "Adjustment"]
 HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 
@@ -48,6 +48,7 @@ def _build_sessions_workbook(plan: dict[str, Any]) -> Workbook:
         exercises = "\n".join(str(exercise) for exercise in session.get("exercises") or [])
         sheet.append(
             [
+                session.get("scheduled_date", ""),
                 session.get("day", ""),
                 session.get("focus", ""),
                 exercises,
@@ -65,10 +66,11 @@ def _build_sessions_workbook(plan: dict[str, Any]) -> Workbook:
 
     for column, width in {
         "A": 14,
-        "B": 28,
-        "C": 42,
-        "D": 24,
-        "E": 38,
+        "B": 14,
+        "C": 28,
+        "D": 42,
+        "E": 24,
+        "F": 38,
     }.items():
         sheet.column_dimensions[column].width = width
     return workbook

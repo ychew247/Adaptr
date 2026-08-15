@@ -1,4 +1,5 @@
 from src.ollama_chat_language import OllamaChatLanguage
+from decimal import Decimal
 
 
 class FakeOllamaClient:
@@ -20,6 +21,106 @@ def test_printable_intent_interprets_a_natural_acceptance():
 
     assert outcome == {"intent": "accept", "response": "Great choice."}
     assert "I would like a copy" in client.calls[0]["user_text"]
+
+
+def test_daily_phase_intent_uses_ollama_to_recognize_a_general_plan_question():
+    client = FakeOllamaClient(
+        ['{"intent":"general_question","plan_delivery":"unspecified","workout_today":"unknown","response":"I can explain the active plan."}']
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "Why is Day 1 no longer in the table?",
+        context={"has_active_plan": True, "awaiting_printable_plan": False},
+    )
+
+    assert outcome == {
+        "intent": "general_question",
+        "follow_up_intent": "none",
+        "plan_delivery": "unspecified",
+        "workout_today": "unknown",
+        "response": "I can explain the active plan.",
+    }
+    assert "Day 1" in client.calls[0]["user_text"]
+
+
+def test_daily_phase_intent_keeps_the_semantic_checkin_classification():
+    client = FakeOllamaClient(
+        ['{"intent":"daily_checkin","plan_delivery":"unspecified","workout_today":"unknown","response":"Let us review today."}']
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "What does the adjustment column mean?",
+        context={"has_active_plan": True, "awaiting_printable_plan": False},
+    )
+
+    assert outcome["intent"] == "daily_checkin"
+
+
+def test_daily_phase_intent_serializes_database_style_context_values():
+    client = FakeOllamaClient(
+        ['{"intent":"general_question","plan_delivery":"unspecified","workout_today":"unknown","response":"Your stored plan is available."}']
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "Can you explain my plan?",
+        context={"profile": {"starting_weight_kg": Decimal("72.5")}},
+    )
+
+    assert outcome["intent"] == "general_question"
+    assert "72.5" in client.calls[0]["user_text"]
+
+
+def test_daily_phase_intent_defaults_omitted_routing_metadata_without_replacing_the_model_intent():
+    client = FakeOllamaClient(
+        ['{"intent":"current_week_plan","response":"Showing it here."}']
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "show it here, not as a file",
+        context={"has_active_plan": True},
+    )
+
+    assert outcome == {
+        "intent": "current_week_plan",
+        "follow_up_intent": "none",
+        "plan_delivery": "unspecified",
+        "workout_today": "unknown",
+        "response": "Showing it here.",
+    }
+
+
+def test_daily_phase_intent_defaults_invalid_routing_metadata_without_replacing_the_model_intent():
+    client = FakeOllamaClient(
+        ['{"intent":"general_question","plan_delivery":null,"workout_today":"maybe","response":"You can export later."}']
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "is there a way to export later?",
+        context={"has_active_plan": True},
+    )
+
+    assert outcome["intent"] == "general_question"
+    assert outcome["plan_delivery"] == "unspecified"
+    assert outcome["workout_today"] == "unknown"
+
+
+def test_daily_phase_intent_safely_falls_back_to_a_question_for_an_unknown_model_label():
+    client = FakeOllamaClient(
+        ['{"intent":"current_week_then_export","response":"I can show it first."}']
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "can you export next week's plan after showing me this week's?",
+        context={"has_active_plan": True},
+    )
+
+    assert outcome == {
+        "intent": "general_question",
+        "follow_up_intent": "none",
+        "plan_delivery": "unspecified",
+        "workout_today": "unknown",
+        "response": "I can show it first.",
+    }
 
 
 def test_printable_intent_keeps_ambiguous_replies_pending():

@@ -42,6 +42,7 @@ def test_chat_posts_to_ollama_chat_api_and_returns_content():
             ],
             "format": "json",
             "stream": False,
+            "options": {"temperature": 0},
         },
         "timeout": 60,
     }

@@ -20,3 +20,25 @@ def test_constraints_turn_sharp_shoulder_pain_into_recovery_only_limits():
     assert constraints["schedule"]["max_sessions"] == 1
     assert "overhead press" in constraints["forbidden_exercises"]
     assert "mobility breathing reset" in constraints["allowed_exercises"]
+
+
+def test_constraints_capture_target_sport_from_goal_details():
+    constraints = derive_plan_constraints(
+        profile={
+            "equipment_access": ["full gym"],
+            "weekly_availability": "4 days/week, 45 minutes",
+            "injury_notes": "",
+            "medical_constraints": "",
+        },
+        goal={
+            "goal_details": {
+                "raw_goal_text": "I am a recreational basketball player and want a month-ish program.",
+                "athlete_type": "recreational athlete",
+                "sport_specific_focus": [],
+            }
+        },
+        readiness={"readiness_score": 83, "band": "train_as_planned", "safety_triggered": False},
+        latest_checkin={"pain_notes": ""},
+    )
+
+    assert constraints["target_sports"] == ["basketball"]

@@ -69,3 +69,34 @@ def test_ollama_checkin_parser_strips_markdown_code_fence():
     assert parsed["energy_level"] == 4
     assert parsed["nutrition_adherence"] == "good"
     assert parsed["checkin_details"]["parser"] == "ollama"
+
+
+def test_explicit_no_pain_overrides_a_contradictory_model_pain_extraction():
+    client = FakeOllamaClient('{"pain_notes":"severe pain","body_flags":["pain"]}')
+
+    parsed = OllamaCheckinParser(client).parse("I slept 7 hours, energy 4/5, no pain.")
+
+    assert parsed["pain_notes"] == ""
+    assert "pain" not in parsed["checkin_details"]["body_flags"]
+
+
+def test_training_intention_does_not_count_as_completed_workout():
+    client = FakeOllamaClient(
+        """
+        {
+          "sleep_hours": 7,
+          "energy_level": 4,
+          "soreness_level": 1,
+          "pain_notes": null,
+          "workout_completed": "yes",
+          "nutrition_adherence": "okay"
+        }
+        """
+    )
+
+    parsed = OllamaCheckinParser(client).parse(
+        "I slept 7 hours, energy 4/5, no pain, soreness 1/5. "
+        "I want to train today. Nutrition was okay."
+    )
+
+    assert parsed["workout_completed"] == "unknown"

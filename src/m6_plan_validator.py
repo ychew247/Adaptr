@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 import re
 from typing import Any, Mapping, Sequence
 
@@ -20,6 +21,16 @@ _EQUIPMENT_BY_EXERCISE = {
 }
 _RECOVERY_TERMS = ("mobility", "easy walk", "breathing", "range of motion")
 _HIGH_INTENSITY_TERMS = ("heavy", "max", "all-out", "sprint", "plyometric")
+_SPORT_TERMS = (
+    "basketball",
+    "badminton",
+    "futsal",
+    "football",
+    "soccer",
+    "running",
+    "cycling",
+    "swimming",
+)
 
 
 def validate_plan(
@@ -67,10 +78,16 @@ def _hard_errors(
             ("schedule_violation", f"Plan has {len(sessions)} sessions; maximum is {max_sessions}.")
         )
 
+    _validate_session_calendar(plan, sessions, errors)
+
     allowed_equipment = [str(item).lower() for item in constraints.get("equipment_access") or []]
     forbidden = [str(item).lower() for item in constraints.get("forbidden_exercises") or []]
     set_ceiling = int(constraints.get("volume_ceiling_sets_per_session") or 18)
     for session in sessions:
+        sport_mismatch = _sport_mismatch(session, constraints)
+        if sport_mismatch:
+            errors.append(sport_mismatch)
+
         exercises = [str(exercise).lower() for exercise in session.get("exercises") or []]
         for exercise in exercises:
             required_equipment = _equipment_requirement(exercise)
@@ -99,6 +116,76 @@ def _hard_errors(
             )
 
     return errors
+
+
+def _validate_session_calendar(
+    plan: Mapping[str, Any],
+    sessions: Sequence[Mapping[str, Any]],
+    errors: list[tuple[str, str]],
+) -> None:
+    """Keep a saved weekly plan internally consistent after a repair."""
+    seen_days: set[str] = set()
+    for session in sessions:
+        day_label = str(session.get("day") or "").strip().lower()
+        if day_label and day_label in seen_days:
+            errors.append(
+                ("duplicate_session_day", f"Plan contains more than one session labelled '{session.get('day')}'.")
+            )
+        elif day_label:
+            seen_days.add(day_label)
+
+    week_start = plan.get("week_start") or (plan.get("plan_json") or {}).get("week_start")
+    if not week_start:
+        return
+    try:
+        start = date.fromisoformat(str(week_start))
+    except ValueError:
+        errors.append(("invalid_plan_week_start", "Plan week_start must be an ISO calendar date."))
+        return
+    end = start + timedelta(days=6)
+    for session in sessions:
+        scheduled_date = session.get("scheduled_date")
+        if not scheduled_date:
+            continue
+        try:
+            scheduled = date.fromisoformat(str(scheduled_date))
+        except ValueError:
+            errors.append(
+                ("invalid_session_date", f"Session '{session.get('day', 'unknown')}' has an invalid scheduled date.")
+            )
+            continue
+        if not start <= scheduled <= end:
+            errors.append(
+                (
+                    "session_outside_plan_week",
+                    f"Session '{session.get('day', 'unknown')}' is outside {start.isoformat()} to {end.isoformat()}.",
+                )
+            )
+
+
+def _sport_mismatch(
+    session: Mapping[str, Any], constraints: Mapping[str, Any]
+) -> tuple[str, str] | None:
+    target_sports = {
+        str(sport).lower() for sport in constraints.get("target_sports") or [] if sport
+    }
+    if not target_sports:
+        return None
+    session_text = " ".join(
+        [str(session.get("focus") or ""), *[str(item) for item in session.get("exercises") or []]]
+    ).lower()
+    mismatched_sports = [
+        sport
+        for sport in _SPORT_TERMS
+        if sport not in target_sports and re.search(rf"\b{re.escape(sport)}\b", session_text)
+    ]
+    if not mismatched_sports:
+        return None
+    return (
+        "sport_mismatch_violation",
+        "Plan contains sport-specific drills for "
+        f"{', '.join(mismatched_sports)} but the target sport is {', '.join(sorted(target_sports))}.",
+    )
 
 
 def _soft_score(

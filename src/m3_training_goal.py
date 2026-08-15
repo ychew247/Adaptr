@@ -170,11 +170,11 @@ def _find_all_keywords(text, keyword_map):
 
 
 def _parse_duration_weeks(text):
-    week_match = re.search(r"\b(\d+)\s*(week|weeks|wk|wks)\b", text)
+    week_match = re.search(r"\b(\d+)\s*(?:-|\s)*(week|weeks|wk|wks)\b", text)
     if week_match:
         return int(week_match.group(1))
 
-    month_match = re.search(r"\b(\d+)\s*(month|months|mth|mths)\b", text)
+    month_match = re.search(r"\b(\d+)\s*(?:-|\s)*(month|months|mth|mths)\b", text)
     if month_match:
         return int(month_match.group(1)) * 4
 

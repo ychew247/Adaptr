@@ -266,3 +266,49 @@ def test_hybrid_service_uses_shared_readiness_without_duplicate_log():
     assert decisions.readiness_calls == []
     assert decisions.plan_calls[0]["readiness"] == readiness
     assert decisions.plan_calls[0]["parent_decision_id"] == "flow-readiness-1"
+
+
+def test_hybrid_service_flags_active_plan_with_wrong_sport_drills_for_refresh():
+    basketball_goal = {
+        **GOAL,
+        "goal_type": "sport_conditioning",
+        "goal_details": {
+            "raw_goal_text": "I am a recreational basketball player and want a month-ish program.",
+            "athlete_type": "recreational_basketball_player",
+            "target_muscle_groups": ["lower_body"],
+        },
+    }
+    active_plan = {
+        "id": "plan-1",
+        "plan_json": {
+            "intensity_band": "normal",
+            "sessions": [
+                {
+                    "day": "Day 4",
+                    "focus": "Lower Body Strength and Agility",
+                    "exercises": [
+                        "Badminton Footwork Intervals",
+                        "Split-Step Reaction Drill",
+                        "Single-Leg Balance",
+                    ],
+                    "sets_reps": "3 sets of 12 reps, 45 minutes",
+                }
+            ],
+        },
+    }
+    service = HybridWorkoutPlanService(
+        profile_repository=FixedRepository({**PROFILE, "equipment_access": ["full gym"]}),
+        goal_repository=FixedRepository(basketball_goal),
+        checkin_repository=CheckinRepository(),
+        plan_repository=PlanRepository(),
+        memory_repository=MemoryRepository(),
+        embedder=Embedder(),
+        plan_generator=RetryingGenerator(),
+    )
+
+    assert service.active_plan_needs_refresh(
+        {"id": "user-1", "display_name": "Alex"},
+        active_plan,
+        readiness={"readiness_score": 90, "band": "train_as_planned", "safety_triggered": False},
+        latest_checkin=CHECKIN,
+    ) is True

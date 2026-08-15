@@ -13,6 +13,7 @@ from src.m5_readiness_score import compute_readiness, has_hard_pain_flag
 from src.m6_plan_constraints import derive_plan_constraints
 from src.m6_plan_validator import validate_plan
 from src.ollama_workout_plan_generator import PlanGenerationFormatError
+from src.workout_plan_selection import find_plan_for_date
 
 
 LOGGER = logging.getLogger(__name__)
@@ -76,6 +77,12 @@ class PlanRepairService:
         if active_plan is None:
             raise PlanRepairError("No active plan exists. Generate Module 6 plan first.")
         trigger_date = trigger_date or str(date.today())
+        active_plan = find_plan_for_date(
+            self.plan_repository,
+            user_id=user["id"],
+            reference_date=trigger_date,
+            fallback_plan=active_plan,
+        )
         existing = self.decision_repository.find_repair_by_trigger(
             user["id"], active_plan["id"], trigger_date
         )
@@ -184,22 +191,25 @@ class PlanRepairService:
         candidate_plan["validation"] = validation
         candidate_plan["validation_status"] = "validated"
         candidate_plan["decision_reason"] = _repair_reason(repair_action, retrieved_memories)
-        saved_plan = self.plan_repository.create_active_plan(
-            {
-                "user_id": user["id"],
-                "goal_id": active_plan["goal_id"],
-                "week_start": candidate_plan["week_start"],
-                "exercise_names": candidate_plan["exercise_names"],
-                "target_muscle_groups": candidate_plan["target_muscle_groups"],
-                "intensity_band": candidate_plan["intensity_band"],
-                "plan_json": candidate_plan,
-                "status": "active",
-                "validation_status": "validated",
-                "validation_notes": validation,
-                "retrieved_memory_ids": candidate_plan["retrieved_memory_ids"],
-                "generation_attempt": attempt,
-            }
-        )
+        repaired_plan = {
+            "user_id": user["id"],
+            "goal_id": active_plan["goal_id"],
+            "week_start": candidate_plan["week_start"],
+            "exercise_names": candidate_plan["exercise_names"],
+            "target_muscle_groups": candidate_plan["target_muscle_groups"],
+            "intensity_band": candidate_plan["intensity_band"],
+            "plan_json": candidate_plan,
+            "status": active_plan.get("status", "active"),
+            "validation_status": "validated",
+            "validation_notes": validation,
+            "retrieved_memory_ids": candidate_plan["retrieved_memory_ids"],
+            "generation_attempt": attempt,
+        }
+        update_repair = getattr(self.plan_repository, "update_plan_after_repair", None)
+        if callable(update_repair):
+            saved_plan = update_repair(active_plan["id"], repaired_plan)
+        else:
+            saved_plan = self.plan_repository.create_active_plan(repaired_plan)
         decision_payload = {
             "user_id": user["id"],
             "checkin_id": latest_checkin.get("id"),
@@ -400,7 +410,13 @@ def apply_repair_action(
         repaired_session["focus"] = "Safety-first recovery"
     elif repair_action["action"] == "reschedule_session":
         repaired_session = {**original_session, **replacement}
-        repaired_session["day"] = _next_day(original_session.get("day", "Day 1"))
+        scheduled_date = repaired_session.get("scheduled_date") or original_session.get("scheduled_date")
+        if scheduled_date:
+            repaired_session["scheduled_date"] = str(
+                date.fromisoformat(str(scheduled_date)) + timedelta(days=1)
+            )
+        repaired_session["day"] = original_session.get("day", "Day 1")
+        repaired_session["status"] = "rescheduled"
     elif repair_action["action"] == "shorten_session":
         repaired_session = {**original_session, **replacement}
         minutes = repair_action.get("time_available_minutes")
@@ -416,12 +432,16 @@ def apply_repair_action(
     repaired_session["sets_reps"] = repaired_session.get("sets_reps") or original_session.get(
         "sets_reps", "As prescribed"
     )
+    sessions[target_index] = repaired_session
     if repair_action["action"] == "recovery_substitution":
-        sessions = [repaired_session]
-    else:
-        sessions[target_index] = repaired_session
-    if repair_action["action"] == "reschedule_session":
-        _reschedule_remaining_sessions(sessions, target_index)
+        for index, session in enumerate(sessions):
+            if session.get("status", "planned") in {"planned", "rescheduled"}:
+                sessions[index] = {
+                    **session,
+                    **_RECOVERY_SESSION,
+                    "day": session.get("day", f"Day {index + 1}"),
+                    "focus": "Safety-first recovery",
+                }
     candidate["sessions"] = sessions
     candidate["exercise_names"] = _exercise_names(sessions)
     candidate["intensity_band"] = repair_action["required_intensity_band"]
@@ -492,18 +512,6 @@ def _time_available_minutes(trigger_text: str) -> int | None:
     if match is None:
         return None
     return int(match.group(1))
-
-
-def _reschedule_remaining_sessions(sessions: list[dict[str, Any]], target_index: int) -> None:
-    for session in sessions[target_index:]:
-        scheduled_date = session.get("scheduled_date")
-        if scheduled_date:
-            session["scheduled_date"] = str(date.fromisoformat(scheduled_date) + timedelta(days=1))
-
-
-def _next_day(day: str) -> str:
-    match = re.search(r"(\d+)", day)
-    return f"Day {int(match.group(1)) + 1}" if match else "Day 2"
 
 
 def _exercise_names(sessions: Sequence[Mapping[str, Any]]) -> list[str]:

@@ -147,3 +147,14 @@ def test_ollama_workout_plan_generator_raises_a_retryable_error_for_malformed_js
             goal=GOAL,
             readiness={"readiness_score": 86, "band": "train_as_planned", "safety_triggered": False},
         )
+
+
+def test_ollama_workout_plan_generator_rejects_missing_prescriptions():
+    client = FakeOllamaClient('{"sessions": [{"exercises": ["dumbbell row"]}]}')
+
+    with pytest.raises(PlanGenerationFormatError, match="specific sets/reps"):
+        OllamaWorkoutPlanGenerator(client).generate(
+            profile=PROFILE,
+            goal=GOAL,
+            readiness={"readiness_score": 86, "band": "train_as_planned", "safety_triggered": False},
+        )

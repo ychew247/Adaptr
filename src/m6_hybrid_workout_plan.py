@@ -12,6 +12,8 @@ from src.m6_plan_constraints import derive_plan_constraints
 from src.m6_plan_validator import validate_plan
 from src.m6_workout_plan import generate_weekly_plan, schedule_sessions
 from src.ollama_workout_plan_generator import PlanGenerationFormatError
+from src.program_schedule import next_week_start, program_window
+from src.workout_plan_selection import find_plan_for_date
 
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +72,9 @@ class HybridWorkoutPlanService:
         readiness: Mapping[str, Any] | None = None,
         latest_checkin: Mapping[str, Any] | None = None,
         parent_decision_id: str | None = None,
+        week_start: str | None = None,
+        week_number: int | None = None,
+        program_start_date: str | None = None,
         say=print,
     ) -> str:
         profile = self.profile_repository.find_by_user_id(user["id"])
@@ -82,6 +87,11 @@ class HybridWorkoutPlanService:
         checkins = self.checkin_repository.find_recent_by_user_id(user["id"], limit=30)
         latest_checkin = latest_checkin or (checkins[0] if checkins else {})
         readiness = readiness or _readiness_from_checkins(checkins)
+        if week_start is None:
+            week_start = program_window(
+                str(latest_checkin.get("checkin_date") or date.today()),
+                int(goal.get("plan_duration_weeks") or 1),
+            )["program_start_date"]
         constraints = derive_plan_constraints(profile, goal, readiness, latest_checkin)
         past_plans = self._past_plans(user["id"])
         query_text = _retrieval_query(profile, goal, latest_checkin, readiness)
@@ -120,6 +130,9 @@ class HybridWorkoutPlanService:
                 latest_checkin,
                 retrieved_memory_ids,
                 attempt,
+                week_start=week_start,
+                week_number=week_number,
+                program_start_date=program_start_date,
             )
             validation = validate_plan(plan_json, constraints, past_plans)
             if validation["hard_validation"]["valid"]:
@@ -177,6 +190,53 @@ class HybridWorkoutPlanService:
                 MAX_RETRIES + 1
             )
         )
+
+    def release_next_week(self, user: Mapping[str, Any], *, say=print) -> str:
+        active_plan = self.plan_repository.find_active_by_user_id(user["id"])
+        if active_plan is None:
+            return "no_active_plan"
+        active_plan = find_plan_for_date(
+            self.plan_repository,
+            user_id=user["id"],
+            reference_date=date.today(),
+            fallback_plan=active_plan,
+        )
+        start = next_week_start(active_plan)
+        if start is None:
+            return "program_complete"
+        existing = getattr(self.plan_repository, "find_by_user_id_and_week_start", lambda *_args: None)(
+            user["id"], start
+        )
+        if existing is not None:
+            return "plan_available"
+        week_number = int((active_plan.get("plan_json") or {}).get("week_number") or 1) + 1
+        program_start_date = (active_plan.get("plan_json") or {}).get("program_start_date")
+        return self.run_plan_generation(
+            user,
+            week_start=start,
+            week_number=week_number,
+            program_start_date=program_start_date,
+            say=say,
+        )
+
+    def active_plan_needs_refresh(
+        self,
+        user: Mapping[str, Any],
+        active_plan: Mapping[str, Any],
+        *,
+        readiness: Mapping[str, Any],
+        latest_checkin: Mapping[str, Any] | None = None,
+    ) -> bool:
+        plan_json = active_plan.get("plan_json") or {}
+        if not plan_json:
+            return False
+        profile = self.profile_repository.find_by_user_id(user["id"])
+        goal = self.goal_repository.find_active_by_user_id(user["id"])
+        if profile is None or goal is None:
+            return False
+        constraints = derive_plan_constraints(profile, goal, readiness, latest_checkin or {})
+        validation = validate_plan(plan_json, constraints, self._past_plans(user["id"]))
+        return not validation["hard_validation"]["valid"]
 
     def _past_plans(self, user_id: str) -> Sequence[Mapping[str, Any]]:
         find_recent = getattr(self.plan_repository, "find_recent_by_user_id", None)
@@ -273,17 +333,27 @@ def _complete_plan(
     checkin: Mapping[str, Any],
     retrieved_memory_ids: list[Any],
     attempt: int,
+    *,
+    week_start: str | None = None,
+    week_number: int | None = None,
+    program_start_date: str | None = None,
 ) -> dict[str, Any]:
     completed = dict(plan)
     sessions = list(completed.get("sessions") or [])
-    week_start = completed.get("week_start") or str(date.today())
+    week_start = week_start or completed.get("week_start") or str(date.today())
+    resolved_week_number = week_number or completed.get("week_number") or 1
     sessions = schedule_sessions(sessions, week_start)
+    program = program_window(
+        program_start_date or week_start, int(goal.get("plan_duration_weeks") or 1)
+    )
     completed.update(
         {
+            "sessions": sessions,
             "goal_id": goal["id"],
             "week_start": week_start,
-            "week_number": completed.get("week_number") or 1,
+            "week_number": resolved_week_number,
             "plan_duration_weeks": goal.get("plan_duration_weeks"),
+            **program,
             "goal_type": goal.get("goal_type"),
             "exercise_names": completed.get("exercise_names") or _exercise_names(sessions),
             "target_muscle_groups": completed.get("target_muscle_groups")

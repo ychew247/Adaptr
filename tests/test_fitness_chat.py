@@ -1,8 +1,8 @@
 from src.fitness_chat import (
     PROFILE_QUESTIONS,
     format_daily_result,
-    is_plan_export_request,
     plan_table_rows,
+    remaining_plan_table_rows,
     profile_answers_to_queue,
 )
 
@@ -53,12 +53,6 @@ def test_format_daily_result_returns_clean_user_facing_text():
     assert "id" not in text
 
 
-def test_plan_export_request_recognizes_common_chat_phrases():
-    assert is_plan_export_request("Please export my training plan to Excel")
-    assert is_plan_export_request("Can I download my workout?")
-    assert not is_plan_export_request("I trained with dumbbells today")
-
-
 def test_plan_table_rows_use_the_validated_session_values():
     rows = plan_table_rows(
         {
@@ -87,3 +81,15 @@ def test_plan_table_rows_use_the_validated_session_values():
             "Adjustment": "Reduce working sets by 20%.",
         }
     ]
+
+
+def test_remaining_plan_rows_hide_completed_and_past_sessions_but_keep_dates_and_prescriptions():
+    plan = {"plan_json": {"sessions": [
+        {"scheduled_date": "2026-08-10", "status": "completed", "day": "Day 1", "focus": "Strength", "exercises": ["row"], "sets_reps": "3 x 8"},
+        {"scheduled_date": "2026-08-12", "status": "planned", "day": "Day 2", "focus": "Intervals", "exercises": ["bike"], "sets_reps": "6 x 30 seconds"},
+        {"scheduled_date": "2026-08-14", "status": "planned", "day": "Day 3", "focus": "Mobility", "exercises": ["walk"], "sets_reps": "20 minutes"},
+    ]}}
+
+    rows = remaining_plan_table_rows(plan, "2026-08-13")
+
+    assert rows == [{"Date": "2026-08-14", "Day": "Day 3", "Focus": "Mobility", "Exercises": "walk", "Sets/Reps": "20 minutes", "Adjustment": ""}]

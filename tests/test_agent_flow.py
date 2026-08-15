@@ -40,6 +40,9 @@ class PlanRepository:
     def find_active_by_user_id(self, user_id):
         return self.active_plan
 
+    def update_plan_sessions(self, plan_id, sessions):
+        self.active_plan = {**self.active_plan, "plan_json": {**self.active_plan.get("plan_json", {}), "sessions": sessions}}
+
 
 class DecisionLog:
     def __init__(self):
@@ -54,6 +57,10 @@ class PlanService:
     def __init__(self, plan_repository):
         self.plan_repository = plan_repository
         self.calls = []
+        self.refresh_needed = False
+
+    def active_plan_needs_refresh(self, user, active_plan, *, readiness, latest_checkin):
+        return self.refresh_needed
 
     def run_plan_generation(self, user, **kwargs):
         self.calls.append(kwargs)
@@ -136,6 +143,18 @@ def test_reduced_readiness_automatically_repairs_before_nutrition():
     assert nutrition.calls[0]["readiness"] == readiness
 
 
+def test_reduced_readiness_repairs_only_the_affected_session_before_any_full_plan_refresh():
+    readiness = {"readiness_score": 65, "band": "reduce_volume", "safety_triggered": False}
+    agent, plans, repairs, _ = _build_agent(readiness)
+    plans.refresh_needed = True
+
+    result = agent.run_daily_flow(USER, workout_today=True, ask=lambda _: "Sore today.")
+
+    assert result["action"] == "repair_applied"
+    assert plans.calls == []
+    assert repairs.calls[0]["readiness"] == readiness
+
+
 def test_safety_readiness_automatically_repairs():
     readiness = {"readiness_score": 30, "band": "recovery_day", "safety_triggered": True}
     agent, _, repairs, _ = _build_agent(readiness)
@@ -157,6 +176,35 @@ def test_missing_active_plan_generates_a_validated_plan_before_nutrition():
     assert repairs.calls == []
     assert result["plan"]["id"] == "generated-plan-1"
     assert nutrition.calls[0]["parent_decision_id"] == "readiness-decision-1"
+
+
+def test_legacy_plan_without_dates_or_prescriptions_is_replaced_before_display():
+    readiness = {"readiness_score": 85, "band": "train_as_planned", "safety_triggered": False}
+    legacy_plan = {
+        "id": "legacy-plan-1",
+        "status": "active",
+        "plan_json": {"sessions": [{"day": "Day 1", "sets_reps": "As prescribed"}]},
+    }
+    agent, plans, repairs, _ = _build_agent(readiness, active_plan=legacy_plan)
+
+    result = agent.run_daily_flow(USER, workout_today=True, ask=lambda _: "Feeling good.")
+
+    assert result["action"] == "plan_ready"
+    assert len(plans.calls) == 1
+    assert repairs.calls == []
+
+
+def test_invalid_active_plan_is_revalidated_and_replaced_before_display():
+    readiness = {"readiness_score": 85, "band": "train_as_planned", "safety_triggered": False}
+    agent, plans, repairs, _ = _build_agent(readiness)
+    plans.refresh_needed = True
+
+    result = agent.run_daily_flow(USER, workout_today=True, ask=lambda _: "Feeling good.")
+
+    assert result["action"] == "plan_ready"
+    assert len(plans.calls) == 1
+    assert plans.calls[0]["latest_checkin"] == CHECKIN
+    assert repairs.calls == []
 
 
 def test_missed_session_repairs_even_when_readiness_is_high():

@@ -37,6 +37,7 @@ Rules:
 - Treat validator_feedback as mandatory corrections for this generation attempt.
 - Keep nutrition advice out of this plan; Module 8 handles nutrition.
 - Do not invent medical certainty or injury diagnosis.
+- For a newly released week, preserve core movement patterns and rotate only 2-3 safe exercise variations across the week.
 - Keep output concise and practical."""
 
 
@@ -136,12 +137,15 @@ def _normalize_sessions(sessions, required_adjustment):
     normalized = []
     for index, session in enumerate(sessions, start=1):
         exercises = session.get("exercises") or []
+        prescription = str(session.get("sets_reps") or "").strip()
+        if not prescription or prescription.lower() == "as prescribed":
+            raise PlanGenerationFormatError("Every workout session needs a specific sets/reps or duration prescription.")
         normalized.append(
             {
                 "day": session.get("day") or f"Day {index}",
                 "focus": session.get("focus") or "Training session",
                 "exercises": [str(exercise) for exercise in exercises if exercise],
-                "sets_reps": session.get("sets_reps") or "As prescribed",
+                "sets_reps": prescription,
                 "adjustment": required_adjustment,
             }
         )

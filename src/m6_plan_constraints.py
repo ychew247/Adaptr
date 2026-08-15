@@ -53,6 +53,16 @@ _BAND_LIMITS = {
     "lighter_session": ("light", 8, 0.6),
     "recovery_day": ("recovery", 4, 0.4),
 }
+_SPORT_TERMS = (
+    "basketball",
+    "badminton",
+    "futsal",
+    "football",
+    "soccer",
+    "running",
+    "cycling",
+    "swimming",
+)
 
 
 def derive_plan_constraints(
@@ -96,6 +106,7 @@ def derive_plan_constraints(
             "weekly_availability": profile.get("weekly_availability") or "3 days/week",
         },
         "target_muscle_groups": goal_details.get("target_muscle_groups") or [],
+        "target_sports": _target_sports(goal_details),
         "injury_notes": profile.get("injury_notes") or "",
         "medical_constraints": profile.get("medical_constraints") or "",
     }
@@ -159,6 +170,17 @@ def _intensity_range(ceiling: str) -> dict[str, str]:
         "recovery": "easy",
     }[ceiling]
     return {"minimum": "easy", "maximum": upper_bound}
+
+
+def _target_sports(goal_details: Mapping[str, Any]) -> list[str]:
+    text = " ".join(
+        [
+            str(goal_details.get("raw_goal_text") or ""),
+            str(goal_details.get("athlete_type") or ""),
+            " ".join(str(item) for item in goal_details.get("sport_specific_focus") or []),
+        ]
+    ).lower()
+    return [sport for sport in _SPORT_TERMS if re.search(rf"\b{re.escape(sport)}\b", text)]
 
 
 def _unique(values: list[str]) -> list[str]:

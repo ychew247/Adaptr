@@ -129,3 +129,47 @@ For users without access to barbells or machines, bodyweight and dumbbell variat
 train the same movement patterns by adjusting tempo, added pause reps, or reduced rest instead
 of added external load. Progression for equipment-limited users should rely more heavily on
 reps, tempo, and volume than on load increases.
+
+
+# Fitness Knowledge Base — Safety Education Snippets
+
+## exercise_emergency_stop_signs
+Source: American Heart Association URL: https://www.heart.org/en/health-topics/heart-attack/warning-signs-of-a-heart-attack Use: Module 15 — supporting education for the emergency-symptom gate
+
+Certain symptoms during exercise are medical emergencies, not fatigue to push through. Chest discomfort — pressure, squeezing, tightness, or pain that lasts more than a few minutes or radiates to the arm, jaw, neck, or back — combined with unusual shortness of breath, dizziness, fainting, or cold/clammy skin, are warning signs of a possible heart attack. These symptoms warrant stopping activity immediately and seeking emergency medical care rather than resting and continuing later. This snippet is educational context only; the hardcoded emergency gate in Module 15 is what actually halts the flow and directs the user to seek help — this snippet does not decide that on its own.
+
+## exercise_general_stop_signs
+
+Source: Sports medicine general exercise-testing guidance URL: (compiled from established exercise-testing stopping criteria — no single public URL) Use: Module 15 — supporting education for intensity-blocking rules
+
+Beyond cardiac warning signs, exercise should stop immediately for: severe or worsening pain unrelated to normal muscular fatigue, sudden loss of coordination or balance, confusion, visual disturbance, or a suspected fracture/acute joint injury. Ordinary muscular fatigue, mild burning during effort, or normal breathlessness that resolves quickly with rest are expected parts of exercise and are not, on their own, stop signals — this distinction is what separates the hard gate (severe/unusual/persistent symptoms) from normal training discomfort.
+
+## injury_aware_training_principles
+
+Source: General sports medicine / rehabilitation guidance URL: (compiled — standard RICE/relative-rest principles, no single canonical source) Use: Module 15 / M7 — supporting education for injury-constrained repairs
+
+When a new injury or acute pain is reported, initial management generally favors relative rest of the affected area (reduced load and range of motion, not necessarily total inactivity), avoiding movements that reproduce sharp pain, and gradual reintroduction of load only once pain-free range of motion returns. Training other, unaffected muscle groups or movement patterns can usually continue. Persistent pain beyond a short window, or pain that doesn't improve with reduced load, should be evaluated by a qualified professional rather than managed indefinitely through training adjustments alone.
+
+## nutrition_photo_estimate_limitations
+
+Source: General nutrition-science communication guidance URL: (compiled — general limitation of image-based food estimation, no single source) Use: Module 15 / M8 — supporting education for photo-based nutrition estimates
+
+Estimating calories or macronutrients from a photo of a meal is inherently approximate. Portion size, cooking method (added oil, butter, sauces), and ingredient substitutions are frequently invisible or ambiguous in an image, which can shift the true calorie count meaningfully from the estimate. Photo- based estimates are best treated as a rough starting point to be confirmed or adjusted by the user, not a precise figure — this is why the system asks for confirmation before using an estimate in nutrition calculations, rather than applying it directly.
+
+## performance_enhancing_drug_risk_education
+
+Source: National Institute on Drug Abuse (NIDA) URL: https://nida.nih.gov/publications/drugfacts/anabolic-steroids Use: Module 15 — supporting education for harmful-substance refusal responses
+
+<cite index="24-1">Anabolic steroids are available legally only by prescription for specific medical conditions, and misuse for performance or appearance carries serious, sometimes irreversible health risks.</cite> <cite index="21-1">Documented risks include increased likelihood of heart attack and stroke, liver problems from oral forms, and infection risk from non-sterile injection practices, alongside hormonal and psychiatric effects.</cite> This system does not provide guidance on obtaining, dosing, or using performance-enhancing drugs; users asking about these substances should be directed toward a licensed physician for an honest risk-benefit conversation, not toward workaround information.
+
+## eating_pattern_safety_education
+
+Source: General eating-disorder-aware communication guidance URL: (see National Alliance for Eating Disorders — https://www.allianceforeatingdisorders.com — for direct support resources) Use: Module 15 — supporting education for eating-disorder-risk handling
+
+Extremely low calorie targets, rapid weight-loss requests, or language suggesting food restriction as a primary goal (rather than health, performance, or a moderate, sustainable target) are patterns worth responding to carefully. This system does not provide guidance on aggressive restriction, and the calorie/protein safety floors in Module 8 exist specifically so a stated aggressive goal cannot lower the nutrition target below a safe minimum. This snippet is context only; the floor itself is enforced deterministically, not by this snippet or by model discretion. Users showing signs of disordered eating patterns should be gently pointed toward professional support (e.g. the National Alliance for Eating Disorders helpline) rather than given further numeric guidance.
+
+## professional_referral_general_principle
+
+Source: General clinical-communication guidance URL: (compiled — standard scope-of-practice principle, no single source) Use: Module 15 — general framing for all safety-adjacent responses
+
+None of the guidance in this knowledge base constitutes medical diagnosis, treatment, or a substitute for professional care. Persistent, severe, or worsening symptoms of any kind — physical pain, disordered eating patterns, or unusual physiological responses to exercise — should be referred to a doctor, physical therapist, or registered dietitian as appropriate, rather than resolved entirely through the app's plan or nutrition adjustments. This framing should be reflected in the tone of any Module 15 educational response, not just its content.

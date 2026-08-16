@@ -95,7 +95,7 @@ Expected result: the app stores the check-in, calculates readiness, generates a 
 After a plan exists, send this single combined status and repair request:
 
 ```text
-I am having soreness in my shoulder and arm, slept 6 hours, and energy is 3/5. According to my status, repair Day 2 and 2026-08-19.
+I am having soreness in my shoulder and arm, slept 6 hours, and energy is 3/5. According to my status, repair Day 2 and <the scheduled date shown for Day 3>.
 ```
 
 Then send:
@@ -104,7 +104,7 @@ Then send:
 show me the repaired workout
 ```
 
-Expected result: the assistant confirms the exact sessions updated. Only **Day 2** and the session dated **2026-08-19** are amended; every other session in the week is retained.
+Replace the placeholder with the date displayed for Day 3 in the generated table (for example, `2026-08-20` when the plan starts on `2026-08-16`). Expected result: the assistant confirms the exact sessions updated. Only **Day 2** and the named date are amended; every other session in the week is retained.
 
 ### Test plan chat and export
 

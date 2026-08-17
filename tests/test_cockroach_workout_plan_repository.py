@@ -146,3 +146,16 @@ def test_find_plan_for_week_skips_a_later_corrupted_duplicate():
     ).find_by_user_id_and_week_start("user-1", "2026-08-22")
 
     assert selected["id"] == "original-plan"
+
+
+def test_update_export_s3_key_persists_the_workbook_object_key():
+    connection = FakeConnection(None)
+
+    CockroachWorkoutPlanRepository(connection).update_export_s3_key(
+        "plan-1", "workout-plans/user-1/plan-1.xlsx"
+    )
+
+    query, params = connection.cursor_instance.queries[0]
+    assert "jsonb_set(plan_json, '{export_s3_key}'" in query
+    assert params == ('"workout-plans/user-1/plan-1.xlsx"', "plan-1")
+    assert connection.commits == 1

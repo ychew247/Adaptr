@@ -187,6 +187,19 @@ class CockroachWorkoutPlanRepository:
             )
         self.connection.commit()
 
+    def update_export_s3_key(self, plan_id, object_key):
+        """Record the private S3 workbook object associated with this plan."""
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE workout_plans
+                SET plan_json = jsonb_set(plan_json, '{export_s3_key}', %s::JSONB)
+                WHERE id = %s
+                """,
+                (json.dumps(object_key), plan_id),
+            )
+        self.connection.commit()
+
     def update_plan_after_repair(self, plan_id, plan):
         """Persist a validated repair as a version of the same program week."""
         with self.connection.cursor() as cursor:

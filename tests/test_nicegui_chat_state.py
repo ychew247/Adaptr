@@ -1,9 +1,10 @@
 from pathlib import Path
 from contextlib import contextmanager
 
-from ui.chat_state import ChatSession
+from ui.chat_state import ChatSession, ChatSessionStore
 from ui.chat_controller import FitnessChatController
 import ui.chat_controller as chat_controller
+from src.s3_workout_plan_storage import WorkoutPlanStorageError
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,54 @@ def test_new_chat_resets_the_conversation_to_a_welcome_message():
     assert session.awaiting_printable_plan is False
 
 
+def test_session_store_keeps_old_session_when_a_new_one_is_started():
+    store = ChatSessionStore()
+    first = store.start_new_session("Welcome")
+    first.add_message("user", "Alex")
+
+    second = store.start_new_session("Welcome again")
+
+    assert len(store.sessions) == 2
+    assert store.active_session_id == second.session_id
+    assert store.activate(first.session_id).messages[-1]["content"] == "Alex"
+
+
+def test_session_store_round_trip_restores_active_named_session():
+    store = ChatSessionStore()
+    session = store.start_new_session("Welcome")
+    session.user = {"id": "user-1", "display_name": "Micheal Phelps"}
+    session.add_message("user", "hello")
+    store.refresh_title(session)
+
+    restored = ChatSessionStore.from_payload(store.to_payload())
+
+    assert restored.active_session.title == "Micheal Phelps"
+    assert restored.active_session.messages[-1]["content"] == "hello"
+
+
+def test_session_store_discards_invalid_browser_payload():
+    restored = ChatSessionStore.from_payload({"version": 1, "sessions": "not a list"})
+
+    assert restored.sessions == []
+    assert restored.active_session_id is None
+
+
+def test_session_snapshot_keeps_message_when_local_download_bytes_are_omitted():
+    session = ChatSession()
+    session.add_message(
+        "assistant",
+        "Your workbook is ready.",
+        download=b"workbook-bytes",
+        filename="workout.xlsx",
+    )
+
+    snapshot = session.to_payload()
+
+    assert snapshot["messages"] == [
+        {"role": "assistant", "content": "Your workbook is ready.", "filename": "workout.xlsx"}
+    ]
+
+
 def test_session_keeps_structured_plan_and_download_metadata():
     session = ChatSession()
 
@@ -35,6 +84,78 @@ def test_session_keeps_structured_plan_and_download_metadata():
 
     assert session.messages[0]["plan"] == {"plan_json": {"sessions": []}}
     assert session.messages[0]["filename"] == "mock_workout_plan.xlsx"
+
+
+def test_s3_export_adds_a_secure_download_url_and_persists_its_object_key(monkeypatch):
+    session = ChatSession(phase="daily", user={"id": "user-1", "display_name": "Alex Lee"})
+    controller = FitnessChatController(session)
+    plan = {"id": "plan-1", "plan_json": {"sessions": [{"day": "Day 1"}]}}
+    saved_keys = []
+
+    class _Storage:
+        def upload_workbook(self, workbook_bytes, *, user_id, plan_id, filename):
+            assert workbook_bytes
+            assert (user_id, plan_id, filename) == ("user-1", "plan-1", "alex_lee_workout_plan.xlsx")
+            return "workout-plans/user-1/plan-1.xlsx"
+
+        def create_download_url(self, object_key, filename):
+            assert object_key == "workout-plans/user-1/plan-1.xlsx"
+            assert filename == "alex_lee_workout_plan.xlsx"
+            return "https://s3.example.test/temporary-link"
+
+    class _Plans:
+        def update_export_s3_key(self, plan_id, object_key):
+            saved_keys.append((plan_id, object_key))
+
+    monkeypatch.setattr(chat_controller.S3WorkoutPlanStorage, "from_environment", lambda: _Storage())
+
+    controller._add_plan_download(plan, "Your workbook is ready.", plans=_Plans())
+
+    assert saved_keys == [("plan-1", "workout-plans/user-1/plan-1.xlsx")]
+    assert plan["plan_json"]["export_s3_key"] == "workout-plans/user-1/plan-1.xlsx"
+    assert session.messages[-1]["download_url"] == "https://s3.example.test/temporary-link"
+    assert "download" not in session.messages[-1]
+
+
+def test_s3_upload_errors_are_shown_without_a_generic_agent_failure():
+    message = chat_controller._friendly_error(
+        WorkoutPlanStorageError("I could not upload your workout workbook to secure storage.")
+    )
+
+    assert message == "I could not upload your workout workbook to secure storage."
+
+
+def test_intent_context_excludes_verbose_profile_data():
+    controller = FitnessChatController(ChatSession())
+    plan = {
+        "plan_json": {
+            "week_start": "2026-08-15",
+            "sessions": [
+                {
+                    "scheduled_date": "2026-08-15",
+                    "day": "Day 1",
+                    "focus": "Smashing power",
+                    "exercises": ["Dumbbell row"],
+                }
+            ],
+        }
+    }
+
+    context = controller._intent_context(plan)
+
+    assert context == {
+        "has_active_plan": True,
+        "awaiting_printable_plan": False,
+        "week_start": "2026-08-15",
+        "sessions": [
+            {
+                "scheduled_date": "2026-08-15",
+                "day": "Day 1",
+                "focus": "Smashing power",
+                "exercises": ["Dumbbell row"],
+            }
+        ],
+    }
 
 
 def test_begin_message_adds_user_message_before_agent_work_runs():
@@ -57,6 +178,16 @@ def test_chat_page_uses_a_request_token_and_stop_control():
     assert "self._request_token" in chat
     assert "self._stop_current_request" in chat
     assert "icon={'stop' if active else 'send'}" in chat
+
+
+def test_chat_page_uses_local_storage_and_dynamic_conversation_entries():
+    chat = (PROJECT_ROOT / "ui" / "chat.py").read_text(encoding="utf-8")
+
+    assert "adaptr.chat_sessions.v1" in chat
+    assert "localStorage.getItem" in chat
+    assert "localStorage.setItem" in chat
+    assert "self._activate_chat" in chat
+    assert 'ui.button("Current session"' not in chat
 
 
 def test_goal_flow_saves_the_same_parsed_ollama_result():
@@ -537,8 +668,9 @@ def test_first_checkin_assumes_training_when_no_plan_exists(monkeypatch):
         def __init__(self):
             self.workout_today = None
 
-        def run_daily_flow(self, _user, *, workout_today, ask, say):
+        def run_daily_flow(self, _user, *, workout_today, requested_repair_dates, ask, say):
             self.workout_today = workout_today
+            assert requested_repair_dates == []
             return {
                 "checkin": {},
                 "readiness": {"readiness_score": 85, "band": "train_as_planned"},
@@ -570,6 +702,66 @@ def test_first_checkin_assumes_training_when_no_plan_exists(monkeypatch):
 
     assert agent.workout_today is True
     assert "are you planning to train" not in session.messages[-1]["content"].lower()
+
+
+def test_compound_checkin_routes_resolved_repair_dates_to_the_agent(monkeypatch):
+    plan = {
+        "id": "plan-1",
+        "plan_json": {
+            "week_start": "2026-08-15",
+            "sessions": [
+                {"day": "Day 1", "scheduled_date": "2026-08-15", "focus": "Smashing"},
+                {"day": "Day 2", "scheduled_date": "2026-08-17", "focus": "Shoulder"},
+                {"day": "Day 3", "scheduled_date": "2026-08-19", "focus": "Arm"},
+            ],
+        },
+    }
+    session = ChatSession(phase="daily", user={"id": "user-1", "display_name": "Micheal Phelps"})
+    controller = FitnessChatController(session)
+
+    class _DailyCheckinLanguage(_FakeChatLanguage):
+        def classify_daily_phase_message(self, message, *, context):
+            return {"intent": "daily_checkin", "plan_delivery": "chat", "workout_today": "no", "response": ""}
+
+    class _RepairTargetParser:
+        def parse(self, message):
+            return ["Day 2", "2026-8-19"]
+
+    class _CapturingAgent:
+        def __init__(self):
+            self.calls = []
+
+        def run_daily_flow(self, _user, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "checkin": {"checkin_date": "2026-08-16"},
+                "readiness": {"readiness_score": 65, "band": "reduce_volume"},
+                "action": "repair_applied",
+                "nutrition": {"calories_min": 2000, "protein_g": 120, "hydration_l": 2.5, "fiber_g": 30},
+            }
+
+    agent = _CapturingAgent()
+    monkeypatch.setattr(chat_controller, "database_connection", _fake_database_connection)
+    monkeypatch.setattr(
+        chat_controller,
+        "build_runtime",
+        lambda _connection, include_agent=False: {
+            "profiles": _FakeProfiles(), "plans": _FakePlans(plan),
+            "chat_language": _DailyCheckinLanguage(), "repair_target_parser": _RepairTargetParser(),
+            "agent": agent, "plan_presenter": _FakePlanPresenter(),
+        },
+    )
+
+    controller._handle_daily_message(
+        "My shoulder and arm are sore, I slept 6 hours and energy is 3/5; repair Day 2 and 2026-8-19."
+    )
+
+    assert agent.calls[0]["requested_repair_dates"] == ["2026-08-17", "2026-08-19"]
+    assert any(
+        "Updated only: Day 2 (2026-08-17) and Day 3 (2026-08-19). The rest of this week is unchanged."
+        == message["content"]
+        for message in session.messages
+    )
 
 
 class _FailIfDailyFlowRuns:

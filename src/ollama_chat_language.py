@@ -54,6 +54,10 @@ not put an export request in follow_up_intent. The application will separately
 ask whether any state-changing action is authorized, so never claim that data
 was saved or a plan was changed.
 
+Use printable_accept only when context.awaiting_printable_plan is true and the
+user is accepting that immediately preceding offer. A standalone request for a
+printable, downloadable, or Excel version of a workout plan is plan_export.
+
 Examples:
 - “What’s coming up after this week?” is next_week.
 - “What am I doing on Thursday?” is specific_session.

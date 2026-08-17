@@ -278,7 +278,7 @@ def test_pain_gate_keeps_deterministic_recovery_exercises_despite_model_suggesti
         "pain-free range of motion",
     ]
     assert len(candidate["sessions"]) == 2
-    assert candidate["sessions"][1]["focus"] == "Safety-first recovery"
+    assert candidate["sessions"][1]["focus"] == "Conditioning"
     assert candidate["intensity_band"] == "recovery"
 
 
@@ -327,6 +327,33 @@ def test_date_aware_repair_targets_the_session_scheduled_for_today():
     ]
 
     assert _target_session_index(sessions, "reschedule_session", "2026-08-13") == 1
+
+
+def test_recovery_repair_changes_only_the_explicit_target_session():
+    prior_plan = {
+        "sessions": [
+            {"day": "Day 1", "scheduled_date": "2026-08-15", "focus": "Smashing", "exercises": ["row"]},
+            {"day": "Day 2", "scheduled_date": "2026-08-17", "focus": "Shoulder", "exercises": ["face pull"]},
+            {"day": "Day 3", "scheduled_date": "2026-08-19", "focus": "Arm", "exercises": ["curl"]},
+        ]
+    }
+    readiness = {"readiness_score": 30, "band": "recovery_day", "safety_triggered": True}
+
+    candidate = apply_repair_action(
+        prior_plan,
+        determine_repair_action(readiness, "sharp shoulder pain"),
+        {"replacement_session": {}},
+        {"intensity_ceiling": "recovery"},
+        readiness,
+        {"checkin_date": "2026-08-15"},
+        [],
+        1,
+        target_date="2026-08-19",
+    )
+
+    assert candidate["sessions"][0] == prior_plan["sessions"][0]
+    assert candidate["sessions"][1] == prior_plan["sessions"][1]
+    assert candidate["sessions"][2]["focus"] == "Safety-first recovery"
 
 
 def test_limited_minutes_selects_a_matching_shortened_session():

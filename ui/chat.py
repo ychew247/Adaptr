@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+import json
 
 from nicegui import run, ui
 
 from src.fitness_chat import plan_table_rows, remaining_plan_table_rows
 from ui.chat_controller import FitnessChatController
-from ui.chat_state import ChatSession
+from ui.chat_state import ChatSession, ChatSessionStore
+
+
+_CHAT_STORAGE_KEY = "adaptr.chat_sessions.v1"
 
 
 class FitnessAgentPage:
     def __init__(self) -> None:
+        self.sessions = ChatSessionStore()
         self.session = ChatSession()
         self.controller = FitnessChatController(self.session)
         self.dark_mode = ui.dark_mode(value=True)
@@ -42,9 +47,8 @@ class FitnessAgentPage:
                     "fa-new-chat w-full justify-start mt-4"
                 )
                 ui.label("CONVERSATIONS").classes("fa-muted text-xs font-semibold mt-6 px-2")
-                ui.button("Current session", icon="chat_bubble_outline").props("flat no-caps align=left").classes(
-                    "fa-nav-item fa-session-active w-full justify-start"
-                )
+                with ui.column().classes("w-full gap-1") as self.conversation_list:
+                    pass
                 ui.space()
                 ui.label("WORKSPACE").classes("fa-muted text-xs font-semibold px-2")
                 ui.button("Appearance", icon="dark_mode", on_click=self.dark_mode.toggle).props(
@@ -81,12 +85,63 @@ class FitnessAgentPage:
     async def _initialize_chat(self) -> None:
         if await ui.run_javascript("window.innerWidth <= 760"):
             self.left_drawer.hide()
+        if await self._restore_sessions():
+            self.status_label.text = self.session.status
+            self._render_sidebar_sessions()
+            self._render_messages()
+            return
+        self._create_session()
         await self._run_controller(self.controller.start_new_chat, "Starting your session")
 
     async def _new_chat(self) -> None:
         if self._is_processing:
             return
+        self._create_session()
         await self._run_controller(self.controller.start_new_chat, "Starting a new chat")
+
+    async def _activate_chat(self, session_id: str) -> None:
+        if self._is_processing or session_id == self.sessions.active_session_id:
+            return
+        try:
+            self.session = self.sessions.activate(session_id)
+        except LookupError:
+            return
+        self.controller = FitnessChatController(self.session)
+        self.status_label.text = self.session.status
+        self._render_sidebar_sessions()
+        self._render_messages()
+        await self._persist_sessions()
+
+    def _create_session(self) -> None:
+        self.session = self.sessions.start_new_session("")
+        self.controller = FitnessChatController(self.session)
+        self._render_sidebar_sessions()
+
+    async def _restore_sessions(self) -> bool:
+        try:
+            raw_payload = await ui.run_javascript(f"localStorage.getItem({json.dumps(_CHAT_STORAGE_KEY)})")
+            if not isinstance(raw_payload, str):
+                return False
+            self.sessions = ChatSessionStore.from_payload(json.loads(raw_payload))
+            if not self.sessions.sessions:
+                return False
+            self.session = self.sessions.active_session
+            self.sessions.refresh_title(self.session)
+            self.controller = FitnessChatController(self.session)
+            return True
+        except (json.JSONDecodeError, LookupError, TypeError, ValueError):
+            self.sessions = ChatSessionStore()
+            return False
+
+    async def _persist_sessions(self) -> None:
+        try:
+            payload = json.dumps(self.sessions.to_payload(), separators=(",", ":"))
+            await ui.run_javascript(
+                f"localStorage.setItem({json.dumps(_CHAT_STORAGE_KEY)}, {json.dumps(payload)})"
+            )
+        except Exception:
+            # Local storage can be disabled or full; live in-memory chats still work.
+            return
 
     async def _composer_action(self) -> None:
         if self._is_processing:
@@ -104,6 +159,7 @@ class FitnessAgentPage:
         queued_message = self.controller.begin_message(message)
         if queued_message is None:
             return
+        await self._persist_sessions()
         await self._run_message(queued_message)
 
     async def _submit_from_keyboard(self, event) -> None:
@@ -117,8 +173,11 @@ class FitnessAgentPage:
         self.status_label.text = status
         self._render_messages()
         await run.io_bound(action, *args)
+        self.sessions.refresh_title(self.session)
         self.status_label.text = self.session.status
+        self._render_sidebar_sessions()
         self._render_messages()
+        await self._persist_sessions()
 
     async def _run_message(self, message: str) -> None:
         self._request_token += 1
@@ -133,11 +192,15 @@ class FitnessAgentPage:
         if request_token != self._request_token:
             return
 
+        self.sessions.replace_active(request_session)
         self.session = request_session
         self.controller = request_controller
+        self.sessions.refresh_title(self.session)
         self._set_processing(False)
         self.status_label.text = self.session.status
+        self._render_sidebar_sessions()
         self._render_messages()
+        await self._persist_sessions()
 
     async def _stop_current_request(self) -> None:
         if not self._is_processing:
@@ -147,7 +210,9 @@ class FitnessAgentPage:
         self.session.add_message("assistant", "Stopped", transition=True)
         self._set_processing(False)
         self.status_label.text = "Stopped"
+        self._render_sidebar_sessions()
         self._render_messages()
+        await self._persist_sessions()
 
     def _set_processing(self, active: bool) -> None:
         self._is_processing = active
@@ -167,6 +232,20 @@ class FitnessAgentPage:
             return
         self._thinking_index = (self._thinking_index + 1) % len(self._thinking_phrases)
         self._render_messages()
+
+    def _render_sidebar_sessions(self) -> None:
+        self.conversation_list.clear()
+        with self.conversation_list:
+            for session in self.sessions.sessions:
+                active = session.session_id == self.sessions.active_session_id
+                classes = "fa-nav-item w-full justify-start"
+                if active:
+                    classes += " fa-session-active"
+                ui.button(
+                    session.title,
+                    icon="chat_bubble_outline",
+                    on_click=lambda session_id=session.session_id: self._activate_chat(session_id),
+                ).props("flat no-caps align=left").classes(classes)
 
     def _render_messages(self) -> None:
         is_welcome = self.session.show_welcome_screen
@@ -201,7 +280,13 @@ class FitnessAgentPage:
                         )
                     if message.get("print_question"):
                         ui.markdown(message["print_question"]).classes("fa-agent-message font-medium")
-                    if message.get("download"):
+                    if message.get("download_url"):
+                        ui.link(
+                            "Download workout plan (.xlsx)",
+                            message["download_url"],
+                            new_tab=True,
+                        ).classes("mt-2 fa-download-link")
+                    elif message.get("download"):
                         ui.button(
                             "Download workout plan (.xlsx)",
                             icon="download",

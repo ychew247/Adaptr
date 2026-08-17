@@ -143,6 +143,22 @@ def test_reduced_readiness_automatically_repairs_before_nutrition():
     assert nutrition.calls[0]["readiness"] == readiness
 
 
+def test_explicit_repair_dates_run_one_repair_for_each_requested_session():
+    readiness = {"readiness_score": 65, "band": "reduce_volume", "safety_triggered": False}
+    agent, plans, repairs, _ = _build_agent(readiness)
+
+    result = agent.run_daily_flow(
+        USER,
+        workout_today=False,
+        requested_repair_dates=["2026-08-17", "2026-08-19"],
+        ask=lambda _: "My shoulder is sore.",
+    )
+
+    assert result["action"] == "repair_applied"
+    assert plans.calls == []
+    assert [call["trigger_date"] for call in repairs.calls] == ["2026-08-17", "2026-08-19"]
+
+
 def test_reduced_readiness_repairs_only_the_affected_session_before_any_full_plan_refresh():
     readiness = {"readiness_score": 65, "band": "reduce_volume", "safety_triggered": False}
     agent, plans, repairs, _ = _build_agent(readiness)

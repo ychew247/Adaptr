@@ -29,6 +29,7 @@ from src.ollama_goal_parser import OllamaGoalParser
 from src.ollama_nutrition_note_generator import OllamaNutritionNoteGenerator
 from src.ollama_plan_presentation import OllamaPlanPresentationGenerator
 from src.ollama_plan_repair_generator import OllamaPlanRepairGenerator
+from src.ollama_repair_target_parser import OllamaRepairTargetParser
 from src.ollama_workout_plan_generator import OllamaWorkoutPlanGenerator
 
 
@@ -86,6 +87,7 @@ def build_runtime(connection: Any, *, include_agent: bool = False) -> dict[str, 
         "goals": goals,
         "plans": plans,
         "chat_language": OllamaChatLanguage(ollama),
+        "repair_target_parser": OllamaRepairTargetParser(ollama),
         "goal_parser": OllamaGoalParser(ollama),
     }
     if not include_agent:

@@ -23,6 +23,12 @@ from src.m3_training_goal import (
 from src.m15_safety_validity import assess_safety
 from src.ollama_chat_language import OllamaChatLanguage
 from src.ollama_client import OllamaClient
+from src.ollama_repair_target_parser import RepairTargetParseError
+from src.s3_workout_plan_storage import S3WorkoutPlanStorage, WorkoutPlanStorageError
+from src.workout_repair_target_selection import (
+    WorkoutRepairTargetError,
+    resolve_repair_target_dates,
+)
 from src.workout_plan_selection import find_plan_for_date
 from src.workout_plan_excel_export import export_sessions_workbook_bytes
 from ui.chat_state import ChatSession
@@ -204,6 +210,7 @@ class FitnessChatController:
                     self._add_plan_download(
                         self.session.pending_printable_plan,
                         self.session.download_ready_message,
+                        plans=runtime["plans"],
                     )
                     return
                 if printable["intent"] == "decline":
@@ -214,7 +221,8 @@ class FitnessChatController:
                     return
             plan = self._plan_for_reference_date(runtime, date.today())
             is_initial_plan_checkin = plan is None
-            intent_context = self._daily_phase_context(profile, plan)
+            response_context = self._daily_phase_context(profile, plan)
+            intent_context = self._intent_context(plan)
             intent_context["awaiting_printable_plan"] = self.session.awaiting_printable_plan
             try:
                 outcome = runtime["chat_language"].classify_daily_phase_message(
@@ -257,13 +265,14 @@ class FitnessChatController:
                     self.session.add_message("assistant", "There is no active workout plan to export yet.")
                     return
                 presentation = runtime["plan_presenter"].generate(plan, {})
-                self._add_plan_download(plan, presentation["download_ready"])
+                self._add_plan_download(plan, presentation["download_ready"], plans=runtime["plans"])
                 return
             if outcome["intent"] == "printable_accept" and self.session.awaiting_printable_plan:
                 self.session.awaiting_printable_plan = False
                 self._add_plan_download(
                     self.session.pending_printable_plan,
                     self.session.download_ready_message,
+                    plans=runtime["plans"],
                 )
                 return
             if outcome["intent"] == "printable_decline" and self.session.awaiting_printable_plan:
@@ -273,7 +282,12 @@ class FitnessChatController:
                 self.session.add_message("assistant", outcome["response"])
                 return
             if outcome["intent"] != "daily_checkin":
-                self._answer_daily_phase_question(runtime, message, intent_context, outcome["response"])
+                self._answer_daily_phase_question(runtime, message, response_context, outcome["response"])
+                return
+            try:
+                requested_repair_dates = self._requested_repair_dates(runtime, plan, message)
+            except (RepairTargetParseError, WorkoutRepairTargetError) as error:
+                self.session.add_message("assistant", str(error))
                 return
             authorization = self._authorize_action(
                 runtime, message, proposed_action="daily_checkin", context=intent_context
@@ -281,7 +295,11 @@ class FitnessChatController:
             if authorization["decision"] != "confirm":
                 self.session.add_message("assistant", authorization["response"])
                 return
-            if authorization["workout_today"] == "unknown" and not is_initial_plan_checkin:
+            if (
+                authorization["workout_today"] == "unknown"
+                and not is_initial_plan_checkin
+                and not requested_repair_dates
+            ):
                 self.session.add_message(
                     "assistant",
                     "Before I save today’s check-in, are you planning to train today?",
@@ -295,6 +313,7 @@ class FitnessChatController:
                     if is_initial_plan_checkin
                     else authorization["workout_today"] == "yes"
                 ),
+                requested_repair_dates=requested_repair_dates,
                 ask=lambda _prompt: message,
                 say=lambda _message: None,
             )
@@ -302,6 +321,10 @@ class FitnessChatController:
             if plan is None:
                 self.session.add_message("assistant", format_daily_result(result))
                 return
+            if requested_repair_dates and result["action"] == "repair_applied":
+                self.session.add_message(
+                    "assistant", self._repair_status_message(plan, requested_repair_dates)
+                )
             follow_up_intent = outcome.get("follow_up_intent", "none")
             if follow_up_intent != "none":
                 self.session.add_message("assistant", format_daily_result(result))
@@ -340,6 +363,48 @@ class FitnessChatController:
             "week_start": plan_json.get("week_start"),
             "sessions": plan_json.get("sessions") or [],
         }
+
+    @staticmethod
+    def _intent_context(plan: dict[str, Any] | None) -> dict[str, Any]:
+        """Keep semantic routing within Ollama's reliable context window."""
+        plan_json = (plan or {}).get("plan_json") or {}
+        sessions = []
+        for session in plan_json.get("sessions") or []:
+            sessions.append(
+                {
+                    key: session[key]
+                    for key in ("scheduled_date", "day", "focus", "exercises")
+                    if key in session
+                }
+            )
+        return {
+            "has_active_plan": plan is not None,
+            "awaiting_printable_plan": False,
+            "week_start": plan_json.get("week_start"),
+            "sessions": sessions,
+        }
+
+    @staticmethod
+    def _requested_repair_dates(
+        runtime: dict[str, Any], plan: dict[str, Any] | None, message: str
+    ) -> list[str]:
+        """Resolve semantic repair references only against the active plan."""
+        parser = runtime.get("repair_target_parser")
+        if parser is None or plan is None:
+            return []
+        references = parser.parse(message)
+        return resolve_repair_target_dates(
+            references, (plan.get("plan_json") or {}).get("sessions") or []
+        )
+
+    @staticmethod
+    def _repair_status_message(plan: dict[str, Any], target_dates: list[str]) -> str:
+        labels = {
+            str(session.get("scheduled_date")): str(session.get("day") or "Workout")
+            for session in (plan.get("plan_json") or {}).get("sessions") or []
+        }
+        changed = [f"{labels.get(target_date, 'Workout')} ({target_date})" for target_date in target_dates]
+        return f"Updated only: {' and '.join(changed)}. The rest of this week is unchanged."
 
     def _plan_for_reference_date(
         self,
@@ -513,14 +578,39 @@ class FitnessChatController:
         self.session.pending_printable_plan = plan
         self.session.download_ready_message = presentation["download_ready"]
 
-    def _add_plan_download(self, plan: dict[str, Any] | None, message: str) -> None:
+    def _add_plan_download(
+        self,
+        plan: dict[str, Any] | None,
+        message: str,
+        *,
+        plans: Any | None = None,
+    ) -> None:
         if plan is None or self.session.user is None:
             raise RuntimeError("There is no workout plan ready to download.")
         filename = f"{self.session.user['display_name'].lower().replace(' ', '_')}_workout_plan.xlsx"
+        workbook_bytes = export_sessions_workbook_bytes(plan)
+        storage = S3WorkoutPlanStorage.from_environment()
+        if storage is not None:
+            object_key = storage.upload_workbook(
+                workbook_bytes,
+                user_id=str(self.session.user["id"]),
+                plan_id=str(plan["id"]),
+                filename=filename,
+            )
+            if plans is not None:
+                plans.update_export_s3_key(plan["id"], object_key)
+            (plan.setdefault("plan_json", {}))["export_s3_key"] = object_key
+            self.session.add_message(
+                "assistant",
+                message,
+                download_url=storage.create_download_url(object_key, filename),
+                filename=filename,
+            )
+            return
         self.session.add_message(
             "assistant",
             message,
-            download=export_sessions_workbook_bytes(plan),
+            download=workbook_bytes,
             filename=filename,
         )
 
@@ -565,6 +655,8 @@ def _validate_profile_answer(key: str, answer: str) -> str | None:
 
 def _friendly_error(error: Exception) -> str:
     message = str(error)
+    if isinstance(error, WorkoutPlanStorageError):
+        return message
     if "DATABASE_URL" in message:
         return "I cannot connect to the fitness database yet. Start the app with DATABASE_URL set in PowerShell."
     if "Connection" in message or "connection" in message:

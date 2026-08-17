@@ -51,6 +51,7 @@ class AdaptiveFitnessAgent:
         *,
         workout_today: bool,
         formula_profile: str | None = None,
+        requested_repair_dates: list[str] | None = None,
         ask=input,
         say=print,
     ) -> AgentFlowResult:
@@ -80,6 +81,7 @@ class AdaptiveFitnessAgent:
             parent_decision_id,
             say,
             active_plan=active_plan,
+            requested_repair_dates=requested_repair_dates,
         )
         nutrition = self.nutrition_service.run_daily_target(
             user,
@@ -110,6 +112,7 @@ class AdaptiveFitnessAgent:
         say: Callable[[str], None],
         *,
         active_plan: Mapping[str, Any] | None = None,
+        requested_repair_dates: list[str] | None = None,
     ) -> str:
         if active_plan is None:
             active_plan = self._plan_for_checkin_date(user, checkin)
@@ -130,6 +133,22 @@ class AdaptiveFitnessAgent:
                     parent_decision_id=parent_decision_id,
                     say=say,
                 )
+            if requested_repair_dates:
+                outcomes = [
+                    self.repair_service.run_repair(
+                        user,
+                        trigger_text=self._repair_trigger(checkin, readiness),
+                        trigger_date=target_date,
+                        readiness=readiness,
+                        latest_checkin=checkin,
+                        parent_decision_id=parent_decision_id,
+                        say=say,
+                    )
+                    for target_date in requested_repair_dates
+                ]
+                if "repair_applied" in outcomes:
+                    return "repair_applied"
+                return outcomes[-1]
             if self._should_repair(checkin, readiness):
                 return self.repair_service.run_repair(
                     user,

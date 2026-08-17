@@ -58,6 +58,8 @@ python nicegui_app.py
 
 Open [http://127.0.0.1:8081](http://127.0.0.1:8081). Database migrations are applied automatically when the chat first connects to the database.
 
+Chat history is stored only in this browser. It survives a page refresh, but clearing site data or using another browser starts with no local chat history.
+
 ## Manual test script
 
 Use a new name, such as **Judge Badminton Demo**, to create isolated mock data. Enter the following profile answers in the order requested:
@@ -139,6 +141,32 @@ workout-plans/<user-id>/<plan-id>.xlsx
 ```
 
 The bucket remains private; Adaptr uses server-side encryption and creates a presigned `GetObject` URL only at download time.
+
+## Deploy to an AWS EC2 public IP
+
+The repository includes a Docker deployment for an Ubuntu EC2 instance with at least 8 GiB memory and 30 GiB disk. It runs NiceGUI, Ollama, and a Caddy reverse proxy; only port 80 is exposed publicly.
+
+On EC2, clone the public repository and enter it:
+
+```bash
+git clone https://github.com/<your-account>/<your-repository>.git adaptr
+cd adaptr
+cp .env.example .env
+nano .env
+```
+
+Set `DATABASE_URL`, `AWS_REGION`, and `AWS_S3_WORKOUT_PLAN_BUCKET` in `.env`. Do not add AWS access keys to this file; attach an EC2 IAM role that grants the app's existing S3 policy instead.
+
+Start the containers and download the required Ollama models:
+
+```bash
+docker compose up -d --build
+docker compose exec ollama ollama pull llama3.2
+docker compose exec ollama ollama pull embeddinggemma
+docker compose ps
+```
+
+Open `http://<EC2-public-IP>` in a browser. The EC2 security group needs public inbound TCP port `80`; restrict SSH port `22` to your own IP. The public URL is HTTP while using a raw IP address. Attach an Elastic IP before sharing the final submission link so that the address remains stable across instance restarts.
 
 ## Troubleshooting
 

@@ -131,6 +131,7 @@ class PlanRepairService:
                 latest_checkin,
                 retrieved_memory_ids,
                 attempt,
+                target_date=trigger_date,
             )
             validation = validate_plan(candidate_plan, constraints, past_plans)
             last_validation = validation
@@ -390,6 +391,8 @@ def apply_repair_action(
     latest_checkin: Mapping[str, Any],
     retrieved_memory_ids: list[Any],
     attempt: int,
+    *,
+    target_date: str | None = None,
 ) -> dict[str, Any]:
     """Apply only the deterministic action shape around the LLM's replacement wording."""
     candidate = deepcopy(dict(prior_plan))
@@ -399,7 +402,7 @@ def apply_repair_action(
     target_index = _target_session_index(
         sessions,
         repair_action["action"],
-        latest_checkin.get("checkin_date"),
+        target_date or latest_checkin.get("checkin_date"),
     )
     original_session = sessions[target_index]
     replacement = dict(suggested_edit.get("replacement_session") or {})
@@ -433,15 +436,6 @@ def apply_repair_action(
         "sets_reps", "As prescribed"
     )
     sessions[target_index] = repaired_session
-    if repair_action["action"] == "recovery_substitution":
-        for index, session in enumerate(sessions):
-            if session.get("status", "planned") in {"planned", "rescheduled"}:
-                sessions[index] = {
-                    **session,
-                    **_RECOVERY_SESSION,
-                    "day": session.get("day", f"Day {index + 1}"),
-                    "focus": "Safety-first recovery",
-                }
     candidate["sessions"] = sessions
     candidate["exercise_names"] = _exercise_names(sessions)
     candidate["intensity_band"] = repair_action["required_intensity_band"]

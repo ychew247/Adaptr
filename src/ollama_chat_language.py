@@ -204,32 +204,16 @@ class OllamaChatLanguage:
     def classify_daily_phase_message(
         self, message: str, *, context: dict[str, Any]
     ) -> dict[str, str]:
-        payload = self._json_payload(
-            DAILY_PHASE_INTENT_INSTRUCTION,
-            json.dumps({"message": message, "context": context}, default=str),
-        )
-        intent = payload.get("intent")
-        follow_up_intent = payload.get("follow_up_intent", "none")
-        plan_delivery = payload.get("plan_delivery", "unspecified")
-        workout_today = payload.get("workout_today", "unknown")
-        response = payload.get("response")
-        if not _is_text(response):
-            raise ChatLanguageFormatError("Ollama did not return a valid daily-phase intent.")
-        if intent not in DAILY_PHASE_INTENTS:
-            intent = "general_question"
-        if follow_up_intent not in DAILY_PHASE_FOLLOW_UP_INTENTS:
-            follow_up_intent = "none"
-        if plan_delivery not in {"chat", "download", "unspecified"}:
-            plan_delivery = "unspecified"
-        if workout_today not in {"yes", "no", "unknown"}:
-            workout_today = "unknown"
-        return {
-            "intent": intent,
-            "follow_up_intent": follow_up_intent,
-            "plan_delivery": plan_delivery,
-            "workout_today": workout_today,
-            "response": response.strip(),
-        }
+        user_text = json.dumps({"message": message, "context": context}, default=str)
+        for attempt in range(2):
+            try:
+                payload = self._json_payload(DAILY_PHASE_INTENT_INSTRUCTION, user_text)
+                return _daily_phase_outcome(payload)
+            except ChatLanguageFormatError:
+                if attempt == 0:
+                    continue
+                raise
+        raise AssertionError("unreachable")
 
     def authorize_action(
         self,
@@ -323,13 +307,42 @@ class OllamaChatLanguage:
 
     def _json_payload(self, instruction: str, user_text: str) -> dict[str, Any]:
         content = self.ollama_client.chat_json_instruction(instruction, user_text)
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError as error:
-            raise ChatLanguageFormatError("Ollama did not return valid chat JSON.") from error
-        if not isinstance(payload, dict):
-            raise ChatLanguageFormatError("Ollama did not return a JSON object.")
-        return payload
+        return _json_object(content)
+
+
+def _json_object(content: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise ChatLanguageFormatError("Ollama did not return valid chat JSON.") from error
+    if not isinstance(payload, dict):
+        raise ChatLanguageFormatError("Ollama did not return a JSON object.")
+    return payload
+
+
+def _daily_phase_outcome(payload: dict[str, Any]) -> dict[str, str]:
+    intent = payload.get("intent")
+    follow_up_intent = payload.get("follow_up_intent", "none")
+    plan_delivery = payload.get("plan_delivery", "unspecified")
+    workout_today = payload.get("workout_today", "unknown")
+    response = payload.get("response")
+    if not _is_text(response):
+        raise ChatLanguageFormatError("Ollama did not return a valid daily-phase intent.")
+    if intent not in DAILY_PHASE_INTENTS:
+        intent = "general_question"
+    if follow_up_intent not in DAILY_PHASE_FOLLOW_UP_INTENTS:
+        follow_up_intent = "none"
+    if plan_delivery not in {"chat", "download", "unspecified"}:
+        plan_delivery = "unspecified"
+    if workout_today not in {"yes", "no", "unknown"}:
+        workout_today = "unknown"
+    return {
+        "intent": intent,
+        "follow_up_intent": follow_up_intent,
+        "plan_delivery": plan_delivery,
+        "workout_today": workout_today,
+        "response": response.strip(),
+    }
 
 
 def _is_text(value: Any) -> bool:

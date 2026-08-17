@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import date, timedelta
+import logging
 from typing import Any, Callable
 
 from src.fitness_agent_runtime import build_runtime, database_connection
@@ -32,6 +33,9 @@ from src.workout_repair_target_selection import (
 from src.workout_plan_selection import find_plan_for_date
 from src.workout_plan_excel_export import export_sessions_workbook_bytes
 from ui.chat_state import ChatSession
+
+
+logger = logging.getLogger(__name__)
 
 
 class FitnessChatController:
@@ -229,6 +233,11 @@ class FitnessChatController:
                     message, context=intent_context
                 )
             except Exception:
+                logger.exception(
+                    "Daily intent classification failed (phase=%s, has_active_plan=%s)",
+                    self.session.phase,
+                    plan is not None,
+                )
                 self.session.add_message(
                     "assistant",
                     "I could not reliably interpret that yet. Please share a check-in with sleep, energy, soreness or pain, and whether you completed today's workout; or ask for a specific plan view.",

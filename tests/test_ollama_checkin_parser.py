@@ -100,3 +100,15 @@ def test_training_intention_does_not_count_as_completed_workout():
     )
 
     assert parsed["workout_completed"] == "unknown"
+
+
+def test_ten_point_energy_score_is_normalized_to_the_five_point_contract():
+    client = FakeOllamaClient(
+        '{"sleep_hours":7,"energy_level":7,"soreness_level":1,"pain_notes":null}'
+    )
+
+    parsed = OllamaCheckinParser(client).parse(
+        "Slept 7 hours, energy 7/10, soreness none, pain none, and I plan to train today."
+    )
+
+    assert parsed["energy_level"] == 4

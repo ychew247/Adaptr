@@ -51,8 +51,8 @@ class OllamaCheckinParser:
         return {
             "sleep_hours": data.get("sleep_hours"),
             "stress_level": data.get("stress_level"),
-            "energy_level": data.get("energy_level"),
-            "soreness_level": data.get("soreness_level"),
+            "energy_level": _normalize_ten_point_rating(data.get("energy_level"), text, "energy"),
+            "soreness_level": _normalize_ten_point_rating(data.get("soreness_level"), text, "soreness"),
             "sore_muscle_groups": data.get("sore_muscle_groups") or [],
             "pain_notes": pain_notes,
             "weight_kg": data.get("weight_kg"),
@@ -92,3 +92,15 @@ def _mentions_training_intention_without_completion(text):
         normalized,
     )
     return completion is None
+
+
+def _normalize_ten_point_rating(value, text, label):
+    """Keep explicit 0-10 ratings compatible with the stored 1-5 readiness scale."""
+    match = re.search(
+        rf"\b{re.escape(label)}(?:\s+levels?)?\s*(?:is|:)?\s*(10|[0-9])\s*/\s*10\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not match:
+        return value
+    return max(1, min(5, (int(match.group(1)) + 1) // 2))

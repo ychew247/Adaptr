@@ -56,6 +56,45 @@ def test_daily_phase_intent_keeps_the_semantic_checkin_classification():
     assert outcome["intent"] == "daily_checkin"
 
 
+def test_daily_phase_intent_retries_once_after_malformed_ollama_json():
+    client = FakeOllamaClient(
+        [
+            "not valid json",
+            ('{"intent":"daily_checkin","follow_up_intent":"none",'
+             '"plan_delivery":"unspecified","workout_today":"yes",'
+             '"response":"I will record this check-in."}'),
+        ]
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "slept 7 hours, energy 7/10, no soreness, and I plan to train today",
+        context={"has_active_plan": True},
+    )
+
+    assert outcome["intent"] == "daily_checkin"
+    assert outcome["workout_today"] == "yes"
+    assert len(client.calls) == 2
+
+
+def test_daily_phase_intent_retries_once_after_an_invalid_ollama_schema():
+    client = FakeOllamaClient(
+        [
+            '{"intent":"daily_checkin","workout_today":"yes"}',
+            ('{"intent":"daily_checkin","follow_up_intent":"none",'
+             '"plan_delivery":"unspecified","workout_today":"yes",'
+             '"response":"I will record this check-in."}'),
+        ]
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "slept 7 hours, energy 7/10, no soreness, and I plan to train today",
+        context={"has_active_plan": True},
+    )
+
+    assert outcome["intent"] == "daily_checkin"
+    assert len(client.calls) == 2
+
+
 def test_daily_phase_intent_serializes_database_style_context_values():
     client = FakeOllamaClient(
         ['{"intent":"general_question","plan_delivery":"unspecified","workout_today":"unknown","response":"Your stored plan is available."}']

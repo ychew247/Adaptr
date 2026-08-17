@@ -10,13 +10,13 @@ class OllamaClient:
         model=None,
         embed_model=None,
         http=requests,
-        timeout=60,
+        timeout=None,
     ):
         self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
         self.model = model or os.getenv("OLLAMA_MODEL") or "llama3.2"
         self.embed_model = embed_model or os.getenv("OLLAMA_EMBED_MODEL") or "embeddinggemma"
         self.http = http
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "60"))
 
     def chat_json_instruction(self, instruction, user_text, *, require_json=True):
         payload = {

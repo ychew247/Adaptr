@@ -57,6 +57,16 @@ def test_chat_omits_json_mode_for_plain_text_requests():
     assert "format" not in http.calls[0]["json"]
 
 
+def test_chat_uses_configured_request_timeout(monkeypatch):
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "180")
+    http = FakeHttp()
+    client = OllamaClient(base_url="http://localhost:11434", model="llama3.2", http=http)
+
+    client.chat_json_instruction("Extract JSON", "I slept 7 hours", require_json=True)
+
+    assert http.calls[0]["timeout"] == 180
+
+
 def test_embed_posts_to_ollama_embed_api_and_returns_first_embedding():
     http = FakeHttp()
     client = OllamaClient(

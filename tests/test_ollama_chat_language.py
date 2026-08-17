@@ -56,6 +56,23 @@ def test_daily_phase_intent_keeps_the_semantic_checkin_classification():
     assert outcome["intent"] == "daily_checkin"
 
 
+def test_daily_phase_intent_accepts_json_wrapped_in_a_markdown_code_fence():
+    fenced_response = '''```json
+        {"intent":"daily_checkin","plan_delivery":"unspecified","workout_today":"yes","response":"I will record this check-in."}
+        ```'''
+    client = FakeOllamaClient(
+        [fenced_response, fenced_response]
+    )
+
+    outcome = OllamaChatLanguage(client).classify_daily_phase_message(
+        "slept 7 hours and I plan to train today",
+        context={"has_active_plan": True},
+    )
+
+    assert outcome["intent"] == "daily_checkin"
+    assert outcome["workout_today"] == "yes"
+
+
 def test_daily_phase_intent_retries_once_after_malformed_ollama_json():
     client = FakeOllamaClient(
         [

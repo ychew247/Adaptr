@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
@@ -36,8 +37,14 @@ class OllamaNutritionNoteGenerator:
 def _plain_note(content: str) -> str:
     """Accept a plain note and unwrap legacy models that still return JSON."""
     try:
-        payload = json.loads(content)
+        payload = json.loads(_strip_code_fence(content))
     except json.JSONDecodeError:
         return content.strip()
     note = payload.get("note") if isinstance(payload, dict) else None
     return note.strip() if isinstance(note, str) and note.strip() else content.strip()
+
+
+def _strip_code_fence(content: str) -> str:
+    stripped = content.strip()
+    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL)
+    return match.group(1).strip() if match else stripped

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Mapping
 
 
@@ -49,7 +50,7 @@ class OllamaPlanPresentationGenerator:
         payload: Mapping[str, Any] = {}
         try:
             content = self.ollama_client.chat_json_instruction(PLAN_PRESENTATION_INSTRUCTION, context)
-            payload = json.loads(content)
+            payload = json.loads(_strip_code_fence(content))
             return _validated_presentation(payload)
         except (json.JSONDecodeError, PlanPresentationFormatError):
             pass
@@ -59,7 +60,7 @@ class OllamaPlanPresentationGenerator:
                 PLAN_PRESENTATION_CORRECTION_INSTRUCTION,
                 json.dumps({"context": context, "invalid_presentation": payload}),
             )
-            return _validated_presentation(json.loads(corrected_content))
+            return _validated_presentation(json.loads(_strip_code_fence(corrected_content)))
         except (json.JSONDecodeError, PlanPresentationFormatError):
             return _presentation_fallback()
 
@@ -78,6 +79,12 @@ def _validated_presentation(payload: Mapping[str, Any]) -> dict[str, str]:
     if not any(word in presentation["download_ready"].lower() for word in ("download", "workbook", "file")):
         raise PlanPresentationFormatError("Ollama did not return a download-ready message.")
     return presentation
+
+
+def _strip_code_fence(content: str) -> str:
+    stripped = content.strip()
+    match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL)
+    return match.group(1).strip() if match else stripped
 
 
 def _presentation_fallback() -> dict[str, str]:

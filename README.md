@@ -34,9 +34,10 @@ ollama pull llama3.2
 ollama pull embeddinggemma
 ```
 
-If Ollama is not already running, start it in another terminal:
+For hybrid Ollama mode, run local Ollama only for embeddings:
 
 ```powershell
+ollama pull embeddinggemma
 ollama serve
 ```
 
@@ -44,9 +45,12 @@ Configure the app. Replace the database value with your CockroachDB Cloud connec
 
 ```powershell
 $env:DATABASE_URL = "postgresql://<user>:<password>@<host>:26257/<database>?sslmode=verify-full"
-$env:OLLAMA_BASE_URL = "http://localhost:11434"
-$env:OLLAMA_MODEL = "llama3.2"
+$env:OLLAMA_BASE_URL = "https://ollama.com"
+$env:OLLAMA_API_KEY = "your-ollama-cloud-api-key"
+$env:OLLAMA_MODEL = "your-remote-chat-model"
+$env:OLLAMA_EMBED_BASE_URL = "http://localhost:11434"
 $env:OLLAMA_EMBED_MODEL = "embeddinggemma"
+$env:OLLAMA_TIMEOUT_SECONDS = "180"
 $env:NICEGUI_PORT = "8081"
 ```
 
@@ -144,7 +148,7 @@ The bucket remains private; Adaptr uses server-side encryption and creates a pre
 
 ## Deploy to an AWS EC2 public IP
 
-The repository includes a Docker deployment for an Ubuntu EC2 instance with at least 8 GiB memory and 30 GiB disk. It runs NiceGUI, Ollama, and a Caddy reverse proxy; only port 80 is exposed publicly.
+The repository includes a Docker deployment for an Ubuntu EC2 instance with at least 8 GiB memory and 30 GiB disk. It runs NiceGUI, a local Ollama container for embeddings, and a Caddy reverse proxy; chat and plan-generation requests use Ollama Cloud. Only port 80 is exposed publicly.
 
 On EC2, clone the public repository and enter it:
 
@@ -155,13 +159,12 @@ cp .env.example .env
 nano .env
 ```
 
-Set `DATABASE_URL`, `AWS_REGION`, and `AWS_S3_WORKOUT_PLAN_BUCKET` in `.env`. For the Linux Docker container, the URL must include `sslmode=verify-full&sslrootcert=system`. Do not add AWS access keys to this file; attach an EC2 IAM role that grants the app's existing S3 policy instead.
+Set `DATABASE_URL`, `OLLAMA_API_KEY`, `OLLAMA_MODEL`, `AWS_REGION`, and `AWS_S3_WORKOUT_PLAN_BUCKET` in `.env`. Keep `OLLAMA_BASE_URL=https://ollama.com` and `OLLAMA_EMBED_BASE_URL=http://ollama:11434`. For the Linux Docker container, the URL must include `sslmode=verify-full&sslrootcert=system`. Do not add AWS access keys to this file; attach an EC2 IAM role that grants the app's existing S3 policy instead. Never commit `.env` or the Ollama API key.
 
-Start the containers and download the required Ollama models:
+Start the containers and download the local embedding model:
 
 ```bash
 docker compose up -d --build
-docker compose exec ollama ollama pull llama3.2
 docker compose exec ollama ollama pull embeddinggemma
 docker compose ps
 ```
@@ -173,7 +176,8 @@ Open `http://<EC2-public-IP>` in a browser. The EC2 security group needs public 
 | Symptom | Check |
 | --- | --- |
 | Database connection error | Confirm `DATABASE_URL` (or `COCKROACH_URL`) is set in the same PowerShell session and that the CockroachDB cluster is reachable. |
-| Ollama connection error | Run `ollama serve`, then verify `ollama list` includes `llama3.2` and `embeddinggemma`. |
+| Ollama chat connection error | Confirm `OLLAMA_BASE_URL`, `OLLAMA_API_KEY`, and `OLLAMA_MODEL`; test the remote API key against `https://ollama.com/api/tags`. |
+| Ollama embedding connection error | Run `ollama serve`, then verify `ollama list` includes `embeddinggemma` and `OLLAMA_EMBED_BASE_URL` points to the local Ollama host. |
 | The app still shows old behavior after editing code | Stop the server with `Ctrl+C` and restart `python nicegui_app.py`; reload is disabled by default. |
 | S3 upload fails with `AccessDenied` | Verify the IAM policy resource matches `arn:aws:s3:::<bucket>/workout-plans/*` and restart the app after changing credentials. |
 | No S3 download button | Set `AWS_S3_WORKOUT_PLAN_BUCKET` before launching the app. Without it, local in-browser download remains available. |

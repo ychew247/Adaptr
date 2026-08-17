@@ -6,7 +6,7 @@ services:
     environment:
       NICEGUI_HOST: 0.0.0.0
       NICEGUI_PORT: 8081
-      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_EMBED_BASE_URL: http://ollama:11434
     volumes:
       - /home/ubuntu/.postgresql/root.crt:/certs/root.crt:ro
     depends_on:
@@ -14,7 +14,15 @@ services:
         condition: service_started
     networks:
       - adaptr
-      
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - adaptr
+
   caddy:
     image: caddy:2
     restart: unless-stopped

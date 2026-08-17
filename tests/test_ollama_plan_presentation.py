@@ -54,6 +54,33 @@ def test_plan_presentation_retries_when_the_printable_question_is_not_a_question
     assert len(client.calls) == 2
 
 
+def test_plan_presentation_accepts_a_fenced_json_response():
+    client = FakeOllamaClient(
+        ['''```json
+        {"introduction":"Your sessions are ready.","print_question":"Would you like a printable copy?","download_ready":"Your workbook is ready below."}
+        ```''']
+    )
+
+    presentation = OllamaPlanPresentationGenerator(client).generate({"plan_json": {}}, {})
+
+    assert presentation["print_question"] == "Would you like a printable copy?"
+
+
+def test_plan_presentation_accepts_a_fenced_json_correction():
+    client = FakeOllamaClient(
+        [
+            '{"introduction":"Your sessions are ready.","print_question":"Train as planned.","download_ready":"Ready."}',
+            '''```json
+            {"introduction":"Your sessions are ready.","print_question":"Would you like a downloadable workbook?","download_ready":"Your downloadable workbook is ready below."}
+            ```''',
+        ]
+    )
+
+    presentation = OllamaPlanPresentationGenerator(client).generate({"plan_json": {}}, {})
+
+    assert presentation["print_question"] == "Would you like a downloadable workbook?"
+
+
 def test_plan_presentation_uses_safe_display_copy_after_two_invalid_responses():
     client = FakeOllamaClient(
         [

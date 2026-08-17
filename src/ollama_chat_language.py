@@ -311,8 +311,12 @@ class OllamaChatLanguage:
 
 
 def _json_object(content: str) -> dict[str, Any]:
+    stripped = content.strip()
+    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", stripped, re.DOTALL)
+    if fenced:
+        stripped = fenced.group(1).strip()
     try:
-        payload = json.loads(content)
+        payload = json.loads(stripped)
     except json.JSONDecodeError as error:
         raise ChatLanguageFormatError("Ollama did not return valid chat JSON.") from error
     if not isinstance(payload, dict):

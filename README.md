@@ -155,7 +155,7 @@ cp .env.example .env
 nano .env
 ```
 
-Set `DATABASE_URL`, `AWS_REGION`, and `AWS_S3_WORKOUT_PLAN_BUCKET` in `.env`. Do not add AWS access keys to this file; attach an EC2 IAM role that grants the app's existing S3 policy instead.
+Set `DATABASE_URL`, `AWS_REGION`, and `AWS_S3_WORKOUT_PLAN_BUCKET` in `.env`. For the Linux Docker container, the URL must include `sslmode=verify-full&sslrootcert=system`. Do not add AWS access keys to this file; attach an EC2 IAM role that grants the app's existing S3 policy instead.
 
 Start the containers and download the required Ollama models:
 

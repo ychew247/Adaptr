@@ -72,6 +72,11 @@ class FitnessChatController:
                 self.session.status = "Ready"
                 return
             except Exception as error:
+                logger.exception(
+           	     "Chat message failed (phase=%s): %s",
+        	      self.session.phase,
+        	      error,
+    		)
                 if attempt == 0 and retryable_phase and _is_transient_database_error(error):
                     continue
                 self.session.add_message("assistant", _friendly_error(error))

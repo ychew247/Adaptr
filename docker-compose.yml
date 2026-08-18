@@ -1,0 +1,46 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NICEGUI_HOST: 0.0.0.0
+      NICEGUI_PORT: 8081
+      OLLAMA_EMBED_BASE_URL: http://ollama:11434
+    volumes:
+      - /home/ubuntu/.postgresql/root.crt:/certs/root.crt:ro
+    depends_on:
+      ollama:
+        condition: service_started
+    networks:
+      - adaptr
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - adaptr
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    networks:
+      - adaptr
+
+volumes:
+  ollama_models:
+  caddy_data:
+  caddy_config:
+
+networks:
+  adaptr:

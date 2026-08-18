@@ -1,0 +1,8 @@
+.git
+.pytest_cache
+.pytest-codex-routing
+__pycache__
+*.py[cod]
+.env
+exports
+docs/superpowers

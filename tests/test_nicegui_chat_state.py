@@ -36,6 +36,52 @@ def test_session_store_keeps_old_session_when_a_new_one_is_started():
     assert store.activate(first.session_id).messages[-1]["content"] == "Alex"
 
 
+def test_session_store_renames_a_session_without_changing_its_messages():
+    store = ChatSessionStore()
+    session = store.start_new_session("Welcome")
+    session.add_message("user", "Keep this conversation")
+
+    renamed = store.rename(session.session_id, "Badminton plan")
+
+    assert renamed.title == "Badminton plan"
+    assert renamed.messages[-1]["content"] == "Keep this conversation"
+    assert store.active_session_id == session.session_id
+
+
+def test_manual_session_rename_survives_the_automatic_profile_title_refresh():
+    store = ChatSessionStore()
+    session = store.start_new_session("Welcome")
+    session.user = {"display_name": "Micheal Phelps"}
+    store.rename(session.session_id, "Shoulder recovery")
+
+    store.refresh_title(session)
+    restored = ChatSessionStore.from_payload(store.to_payload())
+
+    assert restored.active_session.title == "Shoulder recovery"
+    assert restored.active_session.title_is_custom is True
+
+
+def test_session_store_deletes_active_session_and_selects_a_remaining_session():
+    store = ChatSessionStore()
+    first = store.start_new_session("First")
+    second = store.start_new_session("Second")
+
+    store.delete(second.session_id)
+
+    assert [session.session_id for session in store.sessions] == [first.session_id]
+    assert store.active_session_id == first.session_id
+
+
+def test_session_store_deletes_the_last_session_without_leaving_a_selection():
+    store = ChatSessionStore()
+    session = store.start_new_session("Welcome")
+
+    store.delete(session.session_id)
+
+    assert store.sessions == []
+    assert store.active_session_id is None
+
+
 def test_session_store_round_trip_restores_active_named_session():
     store = ChatSessionStore()
     session = store.start_new_session("Welcome")
@@ -178,6 +224,12 @@ def test_chat_page_uses_a_request_token_and_stop_control():
     assert "self._request_token" in chat
     assert "self._stop_current_request" in chat
     assert "icon={'stop' if active else 'send'}" in chat
+
+
+def test_composer_submit_prevents_the_textarea_enter_default_but_keeps_shift_enter_available():
+    chat = (PROJECT_ROOT / "ui" / "chat.py").read_text(encoding="utf-8")
+
+    assert 'self.composer.on("keydown.enter.exact.prevent", self._submit_from_keyboard)' in chat
 
 
 def test_chat_page_uses_local_storage_and_dynamic_conversation_entries():

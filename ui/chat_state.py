@@ -14,6 +14,7 @@ _UNSUPPORTED_JSON_VALUE = object()
 class ChatSession:
     session_id: str = field(default_factory=lambda: str(uuid4()))
     title: str = "New chat"
+    title_is_custom: bool = False
     messages: list[dict[str, Any]] = field(default_factory=list)
     phase: str = "identity"
     user: dict[str, Any] | None = None
@@ -48,6 +49,7 @@ class ChatSession:
             {
                 "session_id": self.session_id,
                 "title": self.title,
+                "title_is_custom": self.title_is_custom,
                 "messages": self.messages,
                 "phase": self.phase,
                 "user": self.user,
@@ -75,6 +77,7 @@ class ChatSession:
         return cls(
             session_id=session_id,
             title=_string_or(payload.get("title"), "New chat"),
+            title_is_custom=payload.get("title_is_custom") is True,
             messages=list(messages) if isinstance(messages, list) else [],
             phase=_string_or(payload.get("phase"), "identity"),
             user=payload.get("user") if isinstance(payload.get("user"), dict) else None,
@@ -128,8 +131,36 @@ class ChatSessionStore:
                 return
         raise LookupError(f"Unknown chat session: {session.session_id}")
 
+    def rename(self, session_id: str, title: str) -> ChatSession:
+        cleaned = title.strip()
+        if not cleaned:
+            raise ValueError("A chat name cannot be empty.")
+        for session in self.sessions:
+            if session.session_id == session_id:
+                session.title = cleaned
+                session.title_is_custom = True
+                return session
+        raise LookupError(f"Unknown chat session: {session_id}")
+
+    def delete(self, session_id: str) -> None:
+        for index, session in enumerate(self.sessions):
+            if session.session_id != session_id:
+                continue
+            was_active = session_id == self.active_session_id
+            self.sessions.pop(index)
+            if not was_active:
+                return
+            if not self.sessions:
+                self.active_session_id = None
+                return
+            self.active_session_id = self.sessions[min(index, len(self.sessions) - 1)].session_id
+            return
+        raise LookupError(f"Unknown chat session: {session_id}")
+
     @staticmethod
     def refresh_title(session: ChatSession) -> None:
+        if session.title_is_custom:
+            return
         display_name = (session.user or {}).get("display_name")
         session.title = display_name.strip() if isinstance(display_name, str) and display_name.strip() else "New chat"
 

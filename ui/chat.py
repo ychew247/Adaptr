@@ -77,7 +77,7 @@ class FitnessAgentPage:
                 self.composer = ui.textarea(placeholder="Message Adaptr").props("borderless autogrow").classes(
                     "flex-grow"
                 )
-                self.composer.on("keydown.enter", self._submit_from_keyboard)
+                self.composer.on("keydown.enter.exact.prevent", self._submit_from_keyboard)
                 self.send_button = ui.button(icon="send", on_click=self._composer_action).props("unelevated round").classes("fa-send").tooltip(
                     "Send message"
                 )
@@ -106,6 +106,50 @@ class FitnessAgentPage:
             self.session = self.sessions.activate(session_id)
         except LookupError:
             return
+        self.controller = FitnessChatController(self.session)
+        self.status_label.text = self.session.status
+        self._render_sidebar_sessions()
+        self._render_messages()
+        await self._persist_sessions()
+
+    def _open_rename_chat_dialog(self, session_id: str) -> None:
+        if self._is_processing:
+            return
+        try:
+            session = next(session for session in self.sessions.sessions if session.session_id == session_id)
+        except StopIteration:
+            return
+        with ui.dialog() as dialog, ui.card().classes("w-80"):
+            ui.label("Rename chat").classes("text-lg font-semibold")
+            title_input = ui.input(value=session.title, label="Chat name").props("autofocus").classes("w-full")
+
+            async def save_name() -> None:
+                try:
+                    self.sessions.rename(session_id, title_input.value or "")
+                except ValueError:
+                    ui.notify("Enter a chat name.", type="warning")
+                    return
+                dialog.close()
+                self._render_sidebar_sessions()
+                await self._persist_sessions()
+
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Cancel", on_click=dialog.close).props("flat no-caps")
+                ui.button("Rename", on_click=save_name).props("unelevated no-caps")
+        dialog.open()
+
+    async def _delete_chat(self, session_id: str) -> None:
+        if self._is_processing:
+            return
+        try:
+            self.sessions.delete(session_id)
+        except LookupError:
+            return
+        if self.sessions.active_session_id is None:
+            self._create_session()
+            await self._run_controller(self.controller.start_new_chat, "Starting a new chat")
+            return
+        self.session = self.sessions.active_session
         self.controller = FitnessChatController(self.session)
         self.status_label.text = self.session.status
         self._render_sidebar_sessions()
@@ -241,11 +285,21 @@ class FitnessAgentPage:
                 classes = "fa-nav-item w-full justify-start"
                 if active:
                     classes += " fa-session-active"
-                ui.button(
-                    session.title,
-                    icon="chat_bubble_outline",
-                    on_click=lambda session_id=session.session_id: self._activate_chat(session_id),
-                ).props("flat no-caps align=left").classes(classes)
+                with ui.element("div").classes("w-full"):
+                    ui.button(
+                        session.title,
+                        icon="chat_bubble_outline",
+                        on_click=lambda session_id=session.session_id: self._activate_chat(session_id),
+                    ).props("flat no-caps align=left").classes(classes)
+                    with ui.context_menu():
+                        ui.menu_item(
+                            "Rename",
+                            on_click=lambda session_id=session.session_id: self._open_rename_chat_dialog(session_id),
+                        )
+                        ui.menu_item(
+                            "Delete",
+                            on_click=lambda session_id=session.session_id: self._delete_chat(session_id),
+                        ).classes("text-negative")
 
     def _render_messages(self) -> None:
         is_welcome = self.session.show_welcome_screen

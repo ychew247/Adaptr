@@ -6,7 +6,7 @@ Adaptr is a conversational fitness coach that turns natural-language goals and d
 
 Try the deployed application here:
 
-http://127.0.0.1:8081
+http://32.236.59.211/
 
 ## Features
 
@@ -31,7 +31,7 @@ Browser → Caddy → NiceGUI app → CockroachDB Cloud
 Prerequisites: Docker Desktop (or Docker Engine + Compose), a CockroachDB Cloud connection string, and an Ollama Cloud API key. Local Ollama is used only for `embeddinggemma`.
 
 ```bash
-git clone https://github.com/<your-account>/<your-repository>.git adaptr
+git clone https://github.com/ychew247/CockroachDB
 cd adaptr
 cp .env.example .env
 ```
